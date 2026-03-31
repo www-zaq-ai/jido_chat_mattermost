@@ -24,3 +24,5 @@ jido_chat_mattermost-*.tar
 
 plan/
 
+# Local Claude Code settings
+.claude/
