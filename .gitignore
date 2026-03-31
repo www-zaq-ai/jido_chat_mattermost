@@ -26,3 +26,6 @@ plan/
 
 # Local Claude Code settings
 .claude/
+
+# Serena MCP local project files
+.serena/
