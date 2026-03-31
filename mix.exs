@@ -1,28 +1,45 @@
 defmodule Jido.Chat.Mattermost.MixProject do
   use Mix.Project
 
+  @version "0.1.0"
+  @source_url "https://github.com/agentjido/jido_chat_mattermost"
+
   def project do
     [
       app: :jido_chat_mattermost,
-      version: "0.1.0",
-      elixir: "~> 1.19",
+      version: @version,
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      aliases: aliases(),
+      name: "Jido Chat Mattermost",
+      description: "Mattermost adapter package for Jido.Chat",
+      source_url: @source_url
     ]
   end
 
-  # Run "mix help compile.app" to learn about applications.
   def application do
-    [
-      extra_applications: [:logger]
-    ]
+    [extra_applications: [:logger]]
   end
 
-  # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      # {:dep_from_hexpm, "~> 0.3.0"},
-      # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
+      {:jido_chat, github: "agentjido/jido_chat", branch: "main"},
+      {:req, "~> 0.5"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+    ]
+  end
+
+  defp aliases do
+    [
+      q: ["quality"],
+      quality: [
+        "format --check-formatted",
+        "compile --warnings-as-errors",
+        "credo --strict",
+        "test"
+      ]
     ]
   end
 end
