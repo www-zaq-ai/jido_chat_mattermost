@@ -194,6 +194,45 @@ defmodule Jido.Chat.Mattermost.Adapter do
     end
   end
 
+  # --- Event parsing ---
+
+  @impl true
+  def parse_event(%Jido.Chat.WebhookRequest{payload: payload}, opts),
+    do: parse_event(payload, opts)
+
+  def parse_event(payload, _opts) when is_map(payload) do
+    post = Map.get(payload, "post", %{})
+
+    cond do
+      Map.has_key?(payload, "command") ->
+        {:ok,
+         Jido.Chat.EventEnvelope.new(%{
+           adapter_name: :mattermost,
+           event_type: :slash_command,
+           channel_id: Map.get(payload, "channel_id"),
+           payload: payload,
+           raw: payload
+         })}
+
+      Map.has_key?(payload, "post") ->
+        {:ok,
+         Jido.Chat.EventEnvelope.new(%{
+           adapter_name: :mattermost,
+           event_type: :message,
+           thread_id: nilify(Map.get(post, "root_id")),
+           channel_id: Map.get(post, "channel_id"),
+           message_id: Map.get(post, "id"),
+           payload: payload,
+           raw: payload
+         })}
+
+      true ->
+        {:ok, :noop}
+    end
+  end
+
+  def parse_event(_payload, _opts), do: {:ok, :noop}
+
   # --- Webhook verification ---
 
   @impl true

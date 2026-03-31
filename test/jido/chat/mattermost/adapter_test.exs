@@ -330,6 +330,56 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
   end
 
   # ---------------------------------------------------------------------------
+  # parse_event/2
+  # ---------------------------------------------------------------------------
+
+  describe "parse_event/2" do
+    test "message payload returns :message EventEnvelope" do
+      payload = %{
+        "post" => %{"id" => "p1", "channel_id" => "c1", "root_id" => ""},
+        "channel_type" => "O"
+      }
+
+      assert {:ok, env} = Adapter.parse_event(payload, [])
+      assert env.event_type == :message
+      assert env.channel_id == "c1"
+      assert env.message_id == "p1"
+      assert env.adapter_name == :mattermost
+    end
+
+    test "slash command payload returns :slash_command EventEnvelope" do
+      payload = %{"command" => "/greet", "channel_id" => "c1", "text" => "world"}
+
+      assert {:ok, env} = Adapter.parse_event(payload, [])
+      assert env.event_type == :slash_command
+      assert env.channel_id == "c1"
+    end
+
+    test "thread reply sets thread_id from root_id" do
+      payload = %{
+        "post" => %{"id" => "p2", "channel_id" => "c1", "root_id" => "p_root"},
+        "channel_type" => "O"
+      }
+
+      assert {:ok, env} = Adapter.parse_event(payload, [])
+      assert env.thread_id == "p_root"
+    end
+
+    test "unknown payload returns :noop" do
+      assert {:ok, :noop} = Adapter.parse_event(%{"unknown" => "payload"}, [])
+    end
+
+    test "WebhookRequest delegates to payload" do
+      request = Jido.Chat.WebhookRequest.new(%{
+        "post" => %{"id" => "p1", "channel_id" => "c1", "root_id" => ""}
+      })
+
+      assert {:ok, env} = Adapter.parse_event(request, [])
+      assert env.event_type == :message
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # verify_webhook/2
   # ---------------------------------------------------------------------------
 
