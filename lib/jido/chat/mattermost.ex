@@ -1,18 +1,9 @@
 defmodule Jido.Chat.Mattermost do
-  @moduledoc """
-  Documentation for `Jido.Chat.Mattermost`.
-  """
+  @moduledoc "Mattermost adapter package for Jido.Chat. Uses Req as HTTP transport."
 
-  @doc """
-  Hello world.
+  alias Jido.Chat.Mattermost.Adapter
+  alias Jido.Chat.Mattermost.Channel
 
-  ## Examples
-
-      iex> Jido.Chat.Mattermost.hello()
-      :world
-
-  """
-  def hello do
-    :world
-  end
+  def adapter, do: Adapter
+  def channel, do: Channel
 end
