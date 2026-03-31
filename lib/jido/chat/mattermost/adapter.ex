@@ -47,13 +47,18 @@ defmodule Jido.Chat.Mattermost.Adapter do
       remove_reaction: :native,
       fetch_messages: :native,
       fetch_channel_messages: :native,
-      send_file: :unsupported,
       post_ephemeral: :unsupported,
       open_dm: :unsupported,
       list_threads: :unsupported,
       open_modal: :unsupported,
-      webhook: :native,
-      verify_webhook: :native
+      webhook: :fallback,
+      verify_webhook: :native,
+      initialize: :fallback,
+      shutdown: :fallback,
+      post_channel_message: :fallback,
+      stream: :fallback,
+      parse_event: :native,
+      format_webhook_response: :native
     }
   end
 
