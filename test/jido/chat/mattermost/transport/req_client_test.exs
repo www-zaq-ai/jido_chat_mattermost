@@ -9,13 +9,6 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClientTest do
   @token System.get_env("MATTERMOST_TOKEN", "")
   @channel_id System.get_env("MATTERMOST_CHANNEL_ID", "")
 
-  @skip @url == "" or @token == "" or @channel_id == ""
-
-  setup do
-    if @skip, do: {:skip, "Set MATTERMOST_URL, MATTERMOST_TOKEN, MATTERMOST_CHANNEL_ID to run"}
-    :ok
-  end
-
   alias Jido.Chat.Mattermost.Transport.ReqClient
 
   defp opts, do: [url: @url, token: @token]
