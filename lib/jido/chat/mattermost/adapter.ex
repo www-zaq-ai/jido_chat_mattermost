@@ -80,18 +80,28 @@ defmodule Jido.Chat.Mattermost.Adapter do
     media = extract_media(metadata)
     {was_mentioned, mentions} = extract_mentions(payload, post, text)
 
-    incoming = %Jido.Chat.Incoming{
-      text: text,
-      external_user_id: user_id,
-      external_room_id: channel_id,
-      external_message_id: post_id,
-      external_thread_id: if(root_id && root_id != "", do: root_id, else: nil),
-      chat_title: channel_display_name,
-      chat_type: if(channel_type == "D", do: :dm, else: :channel),
-      media: media,
-      was_mentioned: was_mentioned,
-      mentions: mentions
-    }
+    incoming =
+      Jido.Chat.Incoming.new(%{
+        text: text,
+        external_user_id: user_id,
+        external_room_id: channel_id,
+        external_message_id: post_id,
+        external_thread_id: nilify(root_id),
+        chat_title: channel_display_name,
+        chat_type: mattermost_channel_type(channel_type),
+        media: media,
+        was_mentioned: was_mentioned,
+        mentions: mentions,
+        raw: payload,
+        channel_meta: %Jido.Chat.ChannelMeta{
+          adapter_name: :mattermost,
+          external_room_id: channel_id,
+          external_thread_id: nilify(root_id),
+          chat_type: mattermost_channel_type(channel_type),
+          chat_title: channel_display_name,
+          is_dm: channel_type == "D"
+        }
+      })
 
     {:ok, incoming}
   end
@@ -217,6 +227,14 @@ defmodule Jido.Chat.Mattermost.Adapter do
   end
 
   defp extract_media(_), do: []
+
+  defp nilify(v) when v in [nil, ""], do: nil
+  defp nilify(v), do: v
+
+  defp mattermost_channel_type("D"), do: :dm
+  defp mattermost_channel_type("P"), do: :private
+  defp mattermost_channel_type("O"), do: :public
+  defp mattermost_channel_type(_), do: :channel
 
   defp extract_mentions(payload, post, text) do
     bot_name = Application.get_env(:jido_chat_mattermost, :bot_name)

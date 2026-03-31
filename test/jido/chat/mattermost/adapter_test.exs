@@ -92,7 +92,7 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
       assert incoming.external_message_id == "p1"
       assert incoming.external_thread_id == nil
       assert incoming.chat_title == "general"
-      assert incoming.chat_type == :channel
+      assert incoming.chat_type == :public
       assert incoming.media == []
       assert incoming.was_mentioned == false
     end
@@ -127,6 +127,58 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
 
       assert {:ok, incoming} = Adapter.transform_incoming(payload)
       assert incoming.chat_type == :dm
+    end
+
+    test "private channel sets chat_type :private" do
+      payload = %{
+        "post" => %{
+          "id" => "p6",
+          "user_id" => "u1",
+          "channel_id" => "c1",
+          "message" => "hi",
+          "root_id" => ""
+        },
+        "channel_type" => "P"
+      }
+
+      assert {:ok, incoming} = Adapter.transform_incoming(payload)
+      assert incoming.chat_type == :private
+    end
+
+    test "populates raw with original payload" do
+      payload = %{
+        "post" => %{
+          "id" => "p7",
+          "user_id" => "u1",
+          "channel_id" => "c1",
+          "message" => "hi",
+          "root_id" => ""
+        },
+        "channel_type" => "O"
+      }
+
+      assert {:ok, incoming} = Adapter.transform_incoming(payload)
+      assert incoming.raw == payload
+    end
+
+    test "populates channel_meta" do
+      payload = %{
+        "post" => %{
+          "id" => "p8",
+          "user_id" => "u1",
+          "channel_id" => "c1",
+          "message" => "hi",
+          "root_id" => ""
+        },
+        "channel_display_name" => "general",
+        "channel_type" => "O"
+      }
+
+      assert {:ok, incoming} = Adapter.transform_incoming(payload)
+      assert incoming.channel_meta.adapter_name == :mattermost
+      assert incoming.channel_meta.external_room_id == "c1"
+      assert incoming.channel_meta.is_dm == false
+      assert incoming.channel_meta.chat_title == "general"
     end
 
     test "mention via text" do
