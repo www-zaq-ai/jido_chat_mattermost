@@ -233,6 +233,28 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   def parse_event(_payload, _opts), do: {:ok, :noop}
 
+  # --- Webhook response formatting ---
+
+  @impl true
+  def format_webhook_response(result, _opts) do
+    case result do
+      {:ok, text} when is_binary(text) ->
+        Jido.Chat.WebhookResponse.accepted(%{"text" => text, "response_type" => "in_channel"})
+
+      {:ok, %{"text" => _} = body} ->
+        Jido.Chat.WebhookResponse.accepted(body)
+
+      :ok ->
+        Jido.Chat.WebhookResponse.accepted()
+
+      {:error, reason} ->
+        Jido.Chat.WebhookResponse.error(500, inspect(reason))
+
+      _ ->
+        Jido.Chat.WebhookResponse.accepted()
+    end
+  end
+
   # --- Webhook verification ---
 
   @impl true

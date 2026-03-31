@@ -380,6 +380,35 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
   end
 
   # ---------------------------------------------------------------------------
+  # format_webhook_response/2
+  # ---------------------------------------------------------------------------
+
+  describe "format_webhook_response/2" do
+    test "text string returns 200 with in_channel body" do
+      response = Adapter.format_webhook_response({:ok, "hello"}, [])
+      assert response.status == 200
+      assert response.body["text"] == "hello"
+      assert response.body["response_type"] == "in_channel"
+    end
+
+    test "text map body passes through" do
+      response = Adapter.format_webhook_response({:ok, %{"text" => "hi"}}, [])
+      assert response.status == 200
+      assert response.body["text"] == "hi"
+    end
+
+    test ":ok returns accepted" do
+      response = Adapter.format_webhook_response(:ok, [])
+      assert response.status == 200
+    end
+
+    test "error returns 500" do
+      response = Adapter.format_webhook_response({:error, :something_failed}, [])
+      assert response.status == 500
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # verify_webhook/2
   # ---------------------------------------------------------------------------
 
