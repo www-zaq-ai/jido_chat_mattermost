@@ -26,6 +26,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   @behaviour Jido.Chat.Adapter
 
+  alias Jido.Chat.{ChannelMeta, EventEnvelope, Incoming, Mention, WebhookRequest, WebhookResponse}
   alias Jido.Chat.Mattermost.Transport.ReqClient
 
   # --- Adapter identity ---
@@ -81,7 +82,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
     {was_mentioned, mentions} = extract_mentions(payload, post, text)
 
     incoming =
-      Jido.Chat.Incoming.new(%{
+      Incoming.new(%{
         text: text,
         external_user_id: user_id,
         external_room_id: channel_id,
@@ -93,7 +94,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
         was_mentioned: was_mentioned,
         mentions: mentions,
         raw: payload,
-        channel_meta: %Jido.Chat.ChannelMeta{
+        channel_meta: %ChannelMeta{
           adapter_name: :mattermost,
           external_room_id: channel_id,
           external_thread_id: nilify(root_id),
@@ -197,7 +198,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
   # --- Event parsing ---
 
   @impl true
-  def parse_event(%Jido.Chat.WebhookRequest{payload: payload}, opts),
+  def parse_event(%WebhookRequest{payload: payload}, opts),
     do: parse_event(payload, opts)
 
   def parse_event(payload, _opts) when is_map(payload) do
@@ -206,7 +207,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
     cond do
       Map.has_key?(payload, "command") ->
         {:ok,
-         Jido.Chat.EventEnvelope.new(%{
+         EventEnvelope.new(%{
            adapter_name: :mattermost,
            event_type: :slash_command,
            channel_id: Map.get(payload, "channel_id"),
@@ -216,7 +217,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
       Map.has_key?(payload, "post") ->
         {:ok,
-         Jido.Chat.EventEnvelope.new(%{
+         EventEnvelope.new(%{
            adapter_name: :mattermost,
            event_type: :message,
            thread_id: nilify(Map.get(post, "root_id")),
@@ -239,25 +240,28 @@ defmodule Jido.Chat.Mattermost.Adapter do
   def format_webhook_response(result, _opts) do
     case result do
       {:ok, text} when is_binary(text) ->
-        Jido.Chat.WebhookResponse.accepted(%{"text" => text, "response_type" => "in_channel"})
+        WebhookResponse.accepted(%{"text" => text, "response_type" => "in_channel"})
 
       {:ok, %{"text" => _} = body} ->
-        Jido.Chat.WebhookResponse.accepted(body)
+        WebhookResponse.accepted(body)
 
       :ok ->
-        Jido.Chat.WebhookResponse.accepted()
+        WebhookResponse.accepted()
 
       {:error, reason} ->
-        Jido.Chat.WebhookResponse.error(500, inspect(reason))
+        WebhookResponse.error(500, inspect(reason))
 
       _ ->
-        Jido.Chat.WebhookResponse.accepted()
+        WebhookResponse.accepted()
     end
   end
 
   # --- Webhook verification ---
 
   @impl true
+  def verify_webhook(%WebhookRequest{payload: payload}, opts),
+    do: verify_webhook(payload, opts)
+
   def verify_webhook(payload, opts) when is_map(payload) do
     expected = opts[:token] || Application.get_env(:jido_chat_mattermost, :token)
 
@@ -316,7 +320,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
     mentions =
       Enum.map(user_ids, fn uid ->
-        %Jido.Chat.Mention{
+        %Mention{
           user_id: uid,
           is_self: uid == bot_user_id,
           mention_text: "@#{uid}"

@@ -2,6 +2,7 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
   use ExUnit.Case, async: true
 
   alias Jido.Chat.Mattermost.Adapter
+  alias Jido.Chat.{Mention, WebhookRequest}
 
   # ---------------------------------------------------------------------------
   # Fake transport — canned responses for all callbacks
@@ -219,7 +220,10 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
       }
 
       assert {:ok, incoming} = Adapter.transform_incoming(payload)
-      assert [%Jido.Chat.Mention{user_id: "bot_uid", mention_text: "@bot_uid"}] = incoming.mentions
+
+      assert [%Mention{user_id: "bot_uid", mention_text: "@bot_uid"}] =
+               incoming.mentions
+
       assert incoming.was_mentioned == true
     end
 
@@ -370,9 +374,10 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
     end
 
     test "WebhookRequest delegates to payload" do
-      request = Jido.Chat.WebhookRequest.new(%{
-        "post" => %{"id" => "p1", "channel_id" => "c1", "root_id" => ""}
-      })
+      request =
+        WebhookRequest.new(%{
+          "post" => %{"id" => "p1", "channel_id" => "c1", "root_id" => ""}
+        })
 
       assert {:ok, env} = Adapter.parse_event(request, [])
       assert env.event_type == :message
@@ -429,6 +434,16 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
 
     test "rejects non-map payload" do
       assert {:error, :invalid_payload} = Adapter.verify_webhook("oops", token: "secret")
+    end
+
+    test "accepts WebhookRequest with matching token" do
+      request = WebhookRequest.new(%{"token" => "secret"})
+      assert :ok = Adapter.verify_webhook(request, token: "secret")
+    end
+
+    test "rejects WebhookRequest with wrong token" do
+      request = WebhookRequest.new(%{"token" => "bad"})
+      assert {:error, :invalid_webhook_token} = Adapter.verify_webhook(request, token: "secret")
     end
   end
 
