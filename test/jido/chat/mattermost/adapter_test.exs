@@ -199,9 +199,28 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
       try do
         assert {:ok, incoming} = Adapter.transform_incoming(payload)
         assert incoming.was_mentioned == true
+        assert incoming.mentions == []
       after
         Application.delete_env(:jido_chat_mattermost, :bot_name)
       end
+    end
+
+    test "mentions via props are returned as Mention structs" do
+      payload = %{
+        "post" => %{
+          "id" => "p9",
+          "user_id" => "u2",
+          "channel_id" => "c1",
+          "message" => "ping",
+          "root_id" => "",
+          "props" => %{"mentions" => ["bot_uid"]}
+        },
+        "channel_type" => "O"
+      }
+
+      assert {:ok, incoming} = Adapter.transform_incoming(payload)
+      assert [%Jido.Chat.Mention{user_id: "bot_uid", mention_text: "@bot_uid"}] = incoming.mentions
+      assert incoming.was_mentioned == true
     end
 
     test "message with files populates media list" do

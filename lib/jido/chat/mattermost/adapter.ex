@@ -238,19 +238,30 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   defp extract_mentions(payload, post, text) do
     bot_name = Application.get_env(:jido_chat_mattermost, :bot_name)
+    bot_user_id = Application.get_env(:jido_chat_mattermost, :bot_user_id)
+    trigger_word = Map.get(payload, "trigger_word", "")
 
-    prop_mentions =
+    user_ids =
       post
       |> Map.get("props", %{})
       |> Map.get("mentions", [])
-
-    trigger_word = Map.get(payload, "trigger_word", "")
+      |> List.wrap()
 
     was_mentioned =
       (bot_name && String.contains?(text, "@#{bot_name}")) ||
         (trigger_word != "" && String.contains?(text, trigger_word)) ||
-        prop_mentions != []
+        (bot_user_id && bot_user_id in user_ids) ||
+        user_ids != []
 
-    {was_mentioned, prop_mentions}
+    mentions =
+      Enum.map(user_ids, fn uid ->
+        %Jido.Chat.Mention{
+          user_id: uid,
+          is_self: uid == bot_user_id,
+          mention_text: "@#{uid}"
+        }
+      end)
+
+    {was_mentioned, mentions}
   end
 end
