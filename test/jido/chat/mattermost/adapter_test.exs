@@ -288,16 +288,16 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
 
   describe "listener_child_specs/2" do
     test "returns empty list for webhook mode" do
-      assert {:ok, []} = Adapter.listener_child_specs([], mode: "webhook")
+      assert {:ok, []} = Adapter.listener_child_specs("bridge_1", ingress: [mode: "webhook"])
     end
 
     test "returns empty list when mode absent (defaults to webhook)" do
-      assert {:ok, []} = Adapter.listener_child_specs([], [])
+      assert {:ok, []} = Adapter.listener_child_specs("bridge_1", [])
     end
 
     test "returns error for unsupported mode" do
       assert {:error, {:unsupported_ingress_mode, "socket"}} =
-               Adapter.listener_child_specs([], mode: "socket")
+               Adapter.listener_child_specs("bridge_1", ingress: [mode: "socket"])
     end
   end
 end
