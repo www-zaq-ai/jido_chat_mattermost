@@ -177,6 +177,33 @@ defmodule Jido.Chat.Mattermost.Adapter do
     fetch_messages(channel_id, opts)
   end
 
+  # --- Webhook dispatch ---
+
+  @doc """
+  Verifies, parses, and normalizes a raw Mattermost webhook payload into a
+  `Jido.Chat.Incoming` struct. Intended to be called directly from a Phoenix
+  webhook controller — no `Jido.Chat` struct or GenServer required.
+
+  Returns `{:ok, Incoming.t()}`, `{:ok, :noop}`, or `{:error, reason}`.
+  """
+  @spec dispatch(map(), keyword()) ::
+          {:ok, Incoming.t()} | {:ok, :noop} | {:error, term()}
+  def dispatch(payload, opts \\ []) do
+    with :ok <- verify_webhook(payload, opts),
+         {:ok, envelope} <- parse_event(payload, opts) do
+      case envelope do
+        :noop ->
+          {:ok, :noop}
+
+        %EventEnvelope{event_type: type} when type in [:message, :slash_command] ->
+          transform_incoming(payload)
+
+        _ ->
+          {:ok, :noop}
+      end
+    end
+  end
+
   # --- Listener / ingress ---
 
   @impl true
