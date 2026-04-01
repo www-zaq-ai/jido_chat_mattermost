@@ -69,19 +69,25 @@ defmodule Jido.Chat.Mattermost.Adapter do
   def transform_incoming(payload, opts \\ [])
 
   def transform_incoming(payload, opts) when is_map(payload) do
-    post = Map.get(payload, "post", %{})
+    # Normalise: Mattermost outgoing webhooks use a flat layout (text, user_id,
+    # post_id, …) whereas WebSocket-style payloads nest everything under "post".
+    {text, user_id, channel_id, post_id, root_id, metadata, post_map} =
+      case Map.get(payload, "post") do
+        post when is_map(post) ->
+          {Map.get(post, "message", ""), Map.get(post, "user_id"), Map.get(post, "channel_id"),
+           Map.get(post, "id"), Map.get(post, "root_id"), Map.get(post, "metadata", %{}), post}
 
-    text = Map.get(post, "message", "")
-    user_id = Map.get(post, "user_id")
-    channel_id = Map.get(post, "channel_id")
-    post_id = Map.get(post, "id")
-    root_id = Map.get(post, "root_id")
+        _ ->
+          {Map.get(payload, "text", ""), Map.get(payload, "user_id"),
+           Map.get(payload, "channel_id"), Map.get(payload, "post_id"),
+           Map.get(payload, "root_id"), %{}, %{}}
+      end
+
     channel_type = Map.get(payload, "channel_type")
     channel_display_name = Map.get(payload, "channel_display_name")
-    metadata = Map.get(post, "metadata", %{})
 
     media = extract_media(metadata)
-    {was_mentioned, mentions} = extract_mentions(payload, post, text, opts)
+    {was_mentioned, mentions} = extract_mentions(payload, post_map, text, opts)
 
     incoming =
       Incoming.new(%{
@@ -248,6 +254,19 @@ defmodule Jido.Chat.Mattermost.Adapter do
            raw: payload
          })}
 
+      # Flat outgoing-webhook payload (text/user_id/post_id at top level)
+      Map.has_key?(payload, "text") ->
+        {:ok,
+         EventEnvelope.new(%{
+           adapter_name: :mattermost,
+           event_type: :message,
+           thread_id: nilify(Map.get(payload, "root_id")),
+           channel_id: Map.get(payload, "channel_id"),
+           message_id: Map.get(payload, "post_id"),
+           payload: payload,
+           raw: payload
+         })}
+
       true ->
         {:ok, :noop}
     end
@@ -328,6 +347,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
     bot_user_id =
       opts[:bot_user_id] || Application.get_env(:jido_chat_mattermost, :bot_user_id)
+
     trigger_word = Map.get(payload, "trigger_word", "")
 
     user_ids =

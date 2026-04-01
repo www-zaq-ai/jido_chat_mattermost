@@ -255,6 +255,47 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
       assert media.url == "https://mm.example.com/file/1"
     end
 
+    test "flat outgoing-webhook payload is normalised" do
+      payload = %{
+        "token" => "tok",
+        "team_id" => "t1",
+        "channel_id" => "c1",
+        "channel_name" => "general",
+        "user_id" => "u1",
+        "user_name" => "alice",
+        "post_id" => "p1",
+        "text" => "hello from webhook",
+        "trigger_word" => "",
+        "channel_type" => "O",
+        "channel_display_name" => "General"
+      }
+
+      assert {:ok, incoming} = Adapter.transform_incoming(payload)
+      assert incoming.text == "hello from webhook"
+      assert incoming.external_user_id == "u1"
+      assert incoming.external_room_id == "c1"
+      assert incoming.external_message_id == "p1"
+      assert incoming.external_thread_id == nil
+      assert incoming.chat_title == "General"
+      assert incoming.chat_type == :public
+    end
+
+    test "flat outgoing-webhook thread reply sets external_thread_id" do
+      payload = %{
+        "token" => "tok",
+        "channel_id" => "c1",
+        "user_id" => "u1",
+        "post_id" => "p2",
+        "text" => "reply text",
+        "root_id" => "p_root",
+        "channel_type" => "O"
+      }
+
+      assert {:ok, incoming} = Adapter.transform_incoming(payload)
+      assert incoming.external_thread_id == "p_root"
+      assert incoming.text == "reply text"
+    end
+
     test "invalid payload returns error" do
       assert {:error, :invalid_payload} = Adapter.transform_incoming("not a map")
     end
@@ -366,6 +407,40 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
       }
 
       assert {:ok, env} = Adapter.parse_event(payload, [])
+      assert env.thread_id == "p_root"
+    end
+
+    test "flat outgoing-webhook payload returns :message EventEnvelope" do
+      payload = %{
+        "token" => "tok",
+        "team_id" => "t1",
+        "channel_id" => "c1",
+        "user_id" => "u1",
+        "user_name" => "alice",
+        "post_id" => "p1",
+        "text" => "hello from webhook",
+        "trigger_word" => ""
+      }
+
+      assert {:ok, env} = Adapter.parse_event(payload, [])
+      assert env.event_type == :message
+      assert env.channel_id == "c1"
+      assert env.message_id == "p1"
+      assert env.thread_id == nil
+    end
+
+    test "flat outgoing-webhook thread reply sets thread_id" do
+      payload = %{
+        "token" => "tok",
+        "channel_id" => "c1",
+        "user_id" => "u1",
+        "post_id" => "p2",
+        "text" => "thread reply",
+        "root_id" => "p_root"
+      }
+
+      assert {:ok, env} = Adapter.parse_event(payload, [])
+      assert env.event_type == :message
       assert env.thread_id == "p_root"
     end
 
