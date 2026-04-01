@@ -66,7 +66,9 @@ defmodule Jido.Chat.Mattermost.Adapter do
   # --- Incoming payload normalization ---
 
   @impl true
-  def transform_incoming(payload, opts \\ []) when is_map(payload) do
+  def transform_incoming(payload, opts \\ [])
+
+  def transform_incoming(payload, opts) when is_map(payload) do
     post = Map.get(payload, "post", %{})
 
     text = Map.get(post, "message", "")
@@ -328,7 +330,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
   defp mattermost_channel_type("O"), do: :public
   defp mattermost_channel_type(_), do: :channel
 
-  defp extract_mentions(payload, post, text, opts \\ []) do
+  defp extract_mentions(payload, post, text, opts) do
     bot_name =
       opts[:bot_name] || Application.get_env(:jido_chat_mattermost, :bot_name)
 
