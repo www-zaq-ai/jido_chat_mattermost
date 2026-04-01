@@ -68,6 +68,16 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClient do
     end
   end
 
+  @doc "Lists all teams the bot belongs to."
+  def list_teams(opts) do
+    get("/api/v4/users/me/teams", [], opts)
+  end
+
+  @doc "Lists public channels for a given team."
+  def list_public_channels(team_id, opts) do
+    get("/api/v4/teams/#{team_id}/channels", [per_page: 200], opts)
+  end
+
   # --- private helpers ---
 
   defp resolve_user_id(opts) do

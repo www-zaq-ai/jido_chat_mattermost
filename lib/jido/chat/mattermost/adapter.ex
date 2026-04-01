@@ -66,7 +66,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
   # --- Incoming payload normalization ---
 
   @impl true
-  def transform_incoming(payload) when is_map(payload) do
+  def transform_incoming(payload, opts \\ []) when is_map(payload) do
     post = Map.get(payload, "post", %{})
 
     text = Map.get(post, "message", "")
@@ -79,7 +79,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
     metadata = Map.get(post, "metadata", %{})
 
     media = extract_media(metadata)
-    {was_mentioned, mentions} = extract_mentions(payload, post, text)
+    {was_mentioned, mentions} = extract_mentions(payload, post, text, opts)
 
     incoming =
       Incoming.new(%{
@@ -196,7 +196,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
           {:ok, :noop}
 
         %EventEnvelope{event_type: type} when type in [:message, :slash_command] ->
-          transform_incoming(payload)
+          transform_incoming(payload, opts)
 
         _ ->
           {:ok, :noop}
@@ -328,9 +328,12 @@ defmodule Jido.Chat.Mattermost.Adapter do
   defp mattermost_channel_type("O"), do: :public
   defp mattermost_channel_type(_), do: :channel
 
-  defp extract_mentions(payload, post, text) do
-    bot_name = Application.get_env(:jido_chat_mattermost, :bot_name)
-    bot_user_id = Application.get_env(:jido_chat_mattermost, :bot_user_id)
+  defp extract_mentions(payload, post, text, opts \\ []) do
+    bot_name =
+      opts[:bot_name] || Application.get_env(:jido_chat_mattermost, :bot_name)
+
+    bot_user_id =
+      opts[:bot_user_id] || Application.get_env(:jido_chat_mattermost, :bot_user_id)
     trigger_word = Map.get(payload, "trigger_word", "")
 
     user_ids =
