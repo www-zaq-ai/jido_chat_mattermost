@@ -107,7 +107,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
     {:ok, incoming}
   end
 
-  def transform_incoming(_payload), do: {:error, :invalid_payload}
+  def transform_incoming(_payload, _opts), do: {:error, :invalid_payload}
 
   # --- Send / Edit / Delete ---
 
