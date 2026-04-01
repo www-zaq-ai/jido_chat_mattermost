@@ -26,6 +26,7 @@ defmodule Jido.Chat.Mattermost.MixProject do
     [
       {:jido_chat, github: "agentjido/jido_chat", branch: "main"},
       {:req, "~> 0.5"},
+      {:fresh, "~> 0.4"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]

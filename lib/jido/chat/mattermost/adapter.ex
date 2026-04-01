@@ -209,7 +209,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
   # --- Listener / ingress ---
 
   @impl true
-  def listener_child_specs(_bridge_id, opts) do
+  def listener_child_specs(bridge_id, opts) do
     mode = get_in(opts, [:ingress, :mode]) || get_in(opts, [:settings, :mode]) || "webhook"
 
     case mode do
@@ -218,6 +218,14 @@ defmodule Jido.Chat.Mattermost.Adapter do
         # No persistent socket or listener process is needed — the host
         # application handles the HTTP endpoint.
         {:ok, []}
+
+      "websocket" ->
+        listener_opts =
+          opts
+          |> Keyword.take([:url, :token, :bot_user_id, :bot_name, :channel_ids, :sink_mfa])
+          |> Keyword.put(:bridge_id, bridge_id)
+
+        {:ok, [Jido.Chat.Mattermost.Listener.child_spec(listener_opts)]}
 
       other ->
         {:error, {:unsupported_ingress_mode, other}}
