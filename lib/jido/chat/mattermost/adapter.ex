@@ -26,6 +26,8 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   @behaviour Jido.Chat.Adapter
 
+  require Logger
+
   alias Jido.Chat.{ChannelMeta, EventEnvelope, Incoming, Mention, WebhookRequest, WebhookResponse}
   alias Jido.Chat.Mattermost.Transport.ReqClient
 
@@ -69,6 +71,10 @@ defmodule Jido.Chat.Mattermost.Adapter do
   def transform_incoming(payload, opts \\ [])
 
   def transform_incoming(payload, opts) when is_map(payload) do
+    Logger.info(
+      "[MattermostAdapter] transform_incoming: has_post=#{Map.has_key?(payload, "post")} post_id=#{inspect(Map.get(payload, "post_id"))} root_id=#{inspect(Map.get(payload, "root_id"))}"
+    )
+
     # Normalise: Mattermost outgoing webhooks use a flat layout (text, user_id,
     # post_id, …) whereas WebSocket-style payloads nest everything under "post".
     {text, user_id, channel_id, post_id, root_id, metadata, post_map} =
@@ -82,6 +88,11 @@ defmodule Jido.Chat.Mattermost.Adapter do
            Map.get(payload, "channel_id"), Map.get(payload, "post_id"),
            Map.get(payload, "root_id"), %{}, %{}}
       end
+
+    # Flat outgoing-webhook payloads omit root_id for thread replies.
+    # When we have a post_id but no root_id, fetch the post from the API
+    # to discover whether it belongs to a thread.
+    root_id = maybe_enrich_root_id(root_id, post_id, opts)
 
     channel_type = Map.get(payload, "channel_type")
     channel_display_name = Map.get(payload, "channel_display_name")
@@ -112,6 +123,10 @@ defmodule Jido.Chat.Mattermost.Adapter do
         }
       })
 
+    Logger.info(
+      "[MattermostAdapter] transform_incoming result: external_thread_id=#{inspect(incoming.external_thread_id)} external_message_id=#{inspect(incoming.external_message_id)}"
+    )
+
     {:ok, incoming}
   end
 
@@ -121,7 +136,9 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   @impl true
   def send_message(channel_id, text, opts \\ []) do
-    transport(opts).send_message(channel_id, text, transport_opts(opts))
+    with {:ok, resp} <- transport(opts).send_message(channel_id, text, transport_opts(opts)) do
+      {:ok, Map.put(resp, "external_message_id", resp["id"])}
+    end
   end
 
   @impl true
@@ -215,11 +232,18 @@ defmodule Jido.Chat.Mattermost.Adapter do
   # --- Listener / ingress ---
 
   @impl true
-  def listener_child_specs(_bridge_id, _opts) do
-    # Mattermost delivers events via outgoing webhook HTTP POST.
-    # No persistent socket or listener process is needed — the host
-    # application handles the HTTP endpoint.
-    {:ok, []}
+  def listener_child_specs(bridge_id, opts) do
+    case get_in(opts, [:ingress, :mode]) do
+      "websocket" ->
+        opts_with_bridge = Keyword.put(opts, :bridge_id, bridge_id)
+        {:ok, [Jido.Chat.Mattermost.Listener.child_spec(opts_with_bridge)]}
+
+      _ ->
+        # Mattermost delivers events via outgoing webhook HTTP POST.
+        # No persistent socket or listener process is needed — the host
+        # application handles the HTTP endpoint.
+        {:ok, []}
+    end
   end
 
   # --- Event parsing ---
@@ -335,6 +359,47 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   defp nilify(v) when v in [nil, ""], do: nil
   defp nilify(v), do: v
+
+  # Flat outgoing-webhook payloads omit root_id for thread replies.
+  # Fetch the post from the Mattermost API to discover the real root_id.
+  defp maybe_enrich_root_id(nil, post_id, opts) when is_binary(post_id) and post_id != "" do
+    Logger.info(
+      "[MattermostAdapter] Enriching root_id for post_id=#{post_id} (missing from flat payload)"
+    )
+
+    case transport(opts).fetch_post(post_id, transport_opts(opts)) do
+      {:ok, %{"root_id" => root_id}} ->
+        enriched = nilify(root_id)
+
+        Logger.info(
+          "[MattermostAdapter] Enriched root_id=#{inspect(enriched)} for post_id=#{post_id}"
+        )
+
+        enriched
+
+      other ->
+        Logger.warning(
+          "[MattermostAdapter] fetch_post failed for post_id=#{post_id}: #{inspect(other)}"
+        )
+
+        nil
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[MattermostAdapter] Exception enriching root_id for post_id=#{post_id}: #{Exception.message(e)}"
+      )
+
+      nil
+  end
+
+  defp maybe_enrich_root_id(root_id, post_id, _opts) do
+    Logger.debug(
+      "[MattermostAdapter] root_id=#{inspect(root_id)} already present for post_id=#{inspect(post_id)}"
+    )
+
+    root_id
+  end
 
   defp mattermost_channel_type("D"), do: :dm
   defp mattermost_channel_type("P"), do: :private
