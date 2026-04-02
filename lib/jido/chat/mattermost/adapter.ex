@@ -19,16 +19,16 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   ## Ingress
 
-  Mattermost uses outgoing webhooks — no persistent socket worker is needed.
-  Configure your Mattermost server to POST to your app's HTTP endpoint, then
-  call `transform_incoming/1` on the raw payload.
+  Mattermost ingress uses a persistent WebSocket connection. Start a listener
+  via `Jido.Chat.Mattermost.Listener.child_spec/1` with a `sink_mfa` that
+  receives normalized `%Incoming{}` structs.
   """
 
   @behaviour Jido.Chat.Adapter
 
   require Logger
 
-  alias Jido.Chat.{ChannelMeta, EventEnvelope, Incoming, Mention, WebhookRequest, WebhookResponse}
+  alias Jido.Chat.{ChannelMeta, Incoming, Mention}
   alias Jido.Chat.Mattermost.Transport.ReqClient
 
   # --- Adapter identity ---
@@ -54,14 +54,14 @@ defmodule Jido.Chat.Mattermost.Adapter do
       open_dm: :unsupported,
       list_threads: :unsupported,
       open_modal: :unsupported,
-      webhook: :fallback,
-      verify_webhook: :native,
+      webhook: :unsupported,
+      verify_webhook: :unsupported,
       initialize: :fallback,
       shutdown: :fallback,
       post_channel_message: :fallback,
       stream: :fallback,
-      parse_event: :native,
-      format_webhook_response: :native
+      parse_event: :unsupported,
+      format_webhook_response: :unsupported
     }
   end
 
@@ -70,35 +70,19 @@ defmodule Jido.Chat.Mattermost.Adapter do
   @impl true
   def transform_incoming(payload, opts \\ [])
 
-  def transform_incoming(payload, opts) when is_map(payload) do
-    Logger.info(
-      "[MattermostAdapter] transform_incoming: has_post=#{Map.has_key?(payload, "post")} post_id=#{inspect(Map.get(payload, "post_id"))} root_id=#{inspect(Map.get(payload, "root_id"))}"
-    )
-
-    # Normalise: Mattermost outgoing webhooks use a flat layout (text, user_id,
-    # post_id, …) whereas WebSocket-style payloads nest everything under "post".
-    {text, user_id, channel_id, post_id, root_id, metadata, post_map} =
-      case Map.get(payload, "post") do
-        post when is_map(post) ->
-          {Map.get(post, "message", ""), Map.get(post, "user_id"), Map.get(post, "channel_id"),
-           Map.get(post, "id"), Map.get(post, "root_id"), Map.get(post, "metadata", %{}), post}
-
-        _ ->
-          {Map.get(payload, "text", ""), Map.get(payload, "user_id"),
-           Map.get(payload, "channel_id"), Map.get(payload, "post_id"),
-           Map.get(payload, "root_id"), %{}, %{}}
-      end
-
-    # Flat outgoing-webhook payloads omit root_id for thread replies.
-    # When we have a post_id but no root_id, fetch the post from the API
-    # to discover whether it belongs to a thread.
-    root_id = maybe_enrich_root_id(root_id, post_id, opts)
+  def transform_incoming(%{"post" => post} = payload, opts) when is_map(post) do
+    text = Map.get(post, "message", "")
+    user_id = Map.get(post, "user_id")
+    channel_id = Map.get(post, "channel_id")
+    post_id = Map.get(post, "id")
+    root_id = nilify(Map.get(post, "root_id"))
+    metadata = Map.get(post, "metadata", %{})
 
     channel_type = Map.get(payload, "channel_type")
     channel_display_name = Map.get(payload, "channel_display_name")
 
     media = extract_media(metadata)
-    {was_mentioned, mentions} = extract_mentions(payload, post_map, text, opts)
+    {was_mentioned, mentions} = extract_mentions(payload, post, text, opts)
 
     incoming =
       Incoming.new(%{
@@ -106,7 +90,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
         external_user_id: user_id,
         external_room_id: channel_id,
         external_message_id: post_id,
-        external_thread_id: nilify(root_id),
+        external_thread_id: root_id,
         chat_title: channel_display_name,
         chat_type: mattermost_channel_type(channel_type),
         media: media,
@@ -116,16 +100,12 @@ defmodule Jido.Chat.Mattermost.Adapter do
         channel_meta: %ChannelMeta{
           adapter_name: :mattermost,
           external_room_id: channel_id,
-          external_thread_id: nilify(root_id),
+          external_thread_id: root_id,
           chat_type: mattermost_channel_type(channel_type),
           chat_title: channel_display_name,
           is_dm: channel_type == "D"
         }
       })
-
-    Logger.info(
-      "[MattermostAdapter] transform_incoming result: external_thread_id=#{inspect(incoming.external_thread_id)} external_message_id=#{inspect(incoming.external_message_id)}"
-    )
 
     {:ok, incoming}
   end
@@ -202,140 +182,13 @@ defmodule Jido.Chat.Mattermost.Adapter do
     fetch_messages(channel_id, opts)
   end
 
-  # --- Webhook dispatch ---
-
-  @doc """
-  Verifies, parses, and normalizes a raw Mattermost webhook payload into a
-  `Jido.Chat.Incoming` struct. Intended to be called directly from a Phoenix
-  webhook controller — no `Jido.Chat` struct or GenServer required.
-
-  Returns `{:ok, Incoming.t()}`, `{:ok, :noop}`, or `{:error, reason}`.
-  """
-  @spec dispatch(map(), keyword()) ::
-          {:ok, Incoming.t()} | {:ok, :noop} | {:error, term()}
-  def dispatch(payload, opts \\ []) do
-    with :ok <- verify_webhook(payload, opts),
-         {:ok, envelope} <- parse_event(payload, opts) do
-      case envelope do
-        :noop ->
-          {:ok, :noop}
-
-        %EventEnvelope{event_type: type} when type in [:message, :slash_command] ->
-          transform_incoming(payload, opts)
-
-        _ ->
-          {:ok, :noop}
-      end
-    end
-  end
-
   # --- Listener / ingress ---
 
   @impl true
   def listener_child_specs(bridge_id, opts) do
-    case get_in(opts, [:ingress, :mode]) do
-      "websocket" ->
-        opts_with_bridge = Keyword.put(opts, :bridge_id, bridge_id)
-        {:ok, [Jido.Chat.Mattermost.Listener.child_spec(opts_with_bridge)]}
-
-      _ ->
-        # Mattermost delivers events via outgoing webhook HTTP POST.
-        # No persistent socket or listener process is needed — the host
-        # application handles the HTTP endpoint.
-        {:ok, []}
-    end
+    opts_with_bridge = Keyword.put(opts, :bridge_id, bridge_id)
+    {:ok, [Jido.Chat.Mattermost.Listener.child_spec(opts_with_bridge)]}
   end
-
-  # --- Event parsing ---
-
-  @impl true
-  def parse_event(%WebhookRequest{payload: payload}, opts),
-    do: parse_event(payload, opts)
-
-  def parse_event(payload, _opts) when is_map(payload) do
-    post = Map.get(payload, "post", %{})
-
-    cond do
-      Map.has_key?(payload, "command") ->
-        {:ok,
-         EventEnvelope.new(%{
-           adapter_name: :mattermost,
-           event_type: :slash_command,
-           channel_id: Map.get(payload, "channel_id"),
-           payload: payload,
-           raw: payload
-         })}
-
-      Map.has_key?(payload, "post") ->
-        {:ok,
-         EventEnvelope.new(%{
-           adapter_name: :mattermost,
-           event_type: :message,
-           thread_id: nilify(Map.get(post, "root_id")),
-           channel_id: Map.get(post, "channel_id"),
-           message_id: Map.get(post, "id"),
-           payload: payload,
-           raw: payload
-         })}
-
-      # Flat outgoing-webhook payload (text/user_id/post_id at top level)
-      Map.has_key?(payload, "text") ->
-        {:ok,
-         EventEnvelope.new(%{
-           adapter_name: :mattermost,
-           event_type: :message,
-           thread_id: nilify(Map.get(payload, "root_id")),
-           channel_id: Map.get(payload, "channel_id"),
-           message_id: Map.get(payload, "post_id"),
-           payload: payload,
-           raw: payload
-         })}
-
-      true ->
-        {:ok, :noop}
-    end
-  end
-
-  def parse_event(_payload, _opts), do: {:ok, :noop}
-
-  # --- Webhook response formatting ---
-
-  @impl true
-  def format_webhook_response(result, _opts) do
-    case result do
-      {:ok, text} when is_binary(text) ->
-        WebhookResponse.accepted(%{"text" => text, "response_type" => "in_channel"})
-
-      {:ok, %{"text" => _} = body} ->
-        WebhookResponse.accepted(body)
-
-      :ok ->
-        WebhookResponse.accepted()
-
-      {:error, reason} ->
-        WebhookResponse.error(500, inspect(reason))
-
-      _ ->
-        WebhookResponse.accepted()
-    end
-  end
-
-  # --- Webhook verification ---
-
-  @impl true
-  def verify_webhook(%WebhookRequest{payload: payload}, opts),
-    do: verify_webhook(payload, opts)
-
-  def verify_webhook(payload, opts) when is_map(payload) do
-    expected = opts[:token] || Application.get_env(:jido_chat_mattermost, :token)
-
-    case Map.get(payload, "token") do
-      ^expected when not is_nil(expected) -> :ok
-      _ -> {:error, :invalid_webhook_token}
-    end
-  end
-
-  def verify_webhook(_payload, _opts), do: {:error, :invalid_payload}
 
   # --- Private helpers ---
 
@@ -360,60 +213,14 @@ defmodule Jido.Chat.Mattermost.Adapter do
   defp nilify(v) when v in [nil, ""], do: nil
   defp nilify(v), do: v
 
-  # Flat outgoing-webhook payloads omit root_id for thread replies.
-  # Fetch the post from the Mattermost API to discover the real root_id.
-  defp maybe_enrich_root_id(nil, post_id, opts) when is_binary(post_id) and post_id != "" do
-    Logger.info(
-      "[MattermostAdapter] Enriching root_id for post_id=#{post_id} (missing from flat payload)"
-    )
-
-    case transport(opts).fetch_post(post_id, transport_opts(opts)) do
-      {:ok, %{"root_id" => root_id}} ->
-        enriched = nilify(root_id)
-
-        Logger.info(
-          "[MattermostAdapter] Enriched root_id=#{inspect(enriched)} for post_id=#{post_id}"
-        )
-
-        enriched
-
-      other ->
-        Logger.warning(
-          "[MattermostAdapter] fetch_post failed for post_id=#{post_id}: #{inspect(other)}"
-        )
-
-        nil
-    end
-  rescue
-    e ->
-      Logger.warning(
-        "[MattermostAdapter] Exception enriching root_id for post_id=#{post_id}: #{Exception.message(e)}"
-      )
-
-      nil
-  end
-
-  defp maybe_enrich_root_id(root_id, post_id, _opts) do
-    Logger.debug(
-      "[MattermostAdapter] root_id=#{inspect(root_id)} already present for post_id=#{inspect(post_id)}"
-    )
-
-    root_id
-  end
-
   defp mattermost_channel_type("D"), do: :dm
   defp mattermost_channel_type("P"), do: :private
   defp mattermost_channel_type("O"), do: :public
   defp mattermost_channel_type(_), do: :channel
 
-  defp extract_mentions(payload, post, text, opts) do
-    bot_name =
-      opts[:bot_name] || Application.get_env(:jido_chat_mattermost, :bot_name)
-
-    bot_user_id =
-      opts[:bot_user_id] || Application.get_env(:jido_chat_mattermost, :bot_user_id)
-
-    trigger_word = Map.get(payload, "trigger_word", "")
+  defp extract_mentions(_payload, post, text, opts) do
+    bot_name = opts[:bot_name] || Application.get_env(:jido_chat_mattermost, :bot_name)
+    bot_user_id = opts[:bot_user_id] || Application.get_env(:jido_chat_mattermost, :bot_user_id)
 
     user_ids =
       post
@@ -423,7 +230,6 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
     was_mentioned =
       (bot_name && String.contains?(text, "@#{bot_name}")) ||
-        (trigger_word != "" && String.contains?(text, trigger_word)) ||
         (bot_user_id && bot_user_id in user_ids) ||
         user_ids != []
 

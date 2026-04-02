@@ -2,25 +2,27 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
   @moduledoc """
   Fresh-based WebSocket client for Mattermost event ingestion.
 
-  This is the hot path — must return in ~1-2ms per frame. All heavy
-  work (ChatBridge routing, PendingQuestions, gap resolution) is
-  offloaded to a job worker enqueued here.
+  On each `posted` event the decoded post is normalized into a
+  `Jido.Chat.Incoming` struct (with `metadata.transport: :websocket`) and
+  forwarded to the configured sink via MFA dispatch:
 
-  The caller is responsible for providing `oban_worker` (a module with a
-  `new/1` function that builds a job struct) and `enqueue_fn` (a 1-arity
-  function that enqueues the job, e.g. `&Oban.insert/1`).
+      apply(module, function, extra_args ++ [incoming, sink_opts])
 
   ## Flow
 
       Mattermost WS frame
         → handle_in/2 (decode + filter, ~1ms)
-          → enqueue_fn.(oban_worker.new(payload))
-            → IncomingWebSocketWorker.perform/1 (async, durable)
+          → Adapter.transform_incoming/2
+          → %Incoming{metadata: %{transport: :websocket}}
+          → apply(sink_module, sink_fun, sink_args ++ [incoming, sink_opts])
   """
 
   use Fresh
 
   require Logger
+
+  alias Jido.Chat.Incoming
+  alias Jido.Chat.Mattermost.Adapter
 
   @impl Fresh
   def handle_connect(_status, _headers, state) do
@@ -75,7 +77,7 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
     with {:ok, post} <- decode_post(data),
          true <- not_bot?(post, state),
          true <- in_tracked_channel?(post, channel_type, state) do
-      enqueue_job(post, state)
+      emit_event(post, state)
     end
   end
 
@@ -103,24 +105,32 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
 
   defp in_tracked_channel?(_post, _channel_type, _state), do: true
 
-  defp enqueue_job(post, state) do
-    payload = %{
-      "config_id" => state.config_id,
-      "bridge_id" => state.bridge_id,
-      "post" => post
-    }
+  defp emit_event(post, state) do
+    adapter_opts = [
+      token: state.token,
+      url: state.url,
+      bot_user_id: state.bot_user_id,
+      bot_name: state.bot_name
+    ]
 
-    job = apply(state.oban_worker, :new, [payload])
+    case Adapter.transform_incoming(%{"post" => post}, adapter_opts) do
+      {:ok, %Incoming{} = incoming} ->
+        enriched = %{incoming | metadata: Map.put(incoming.metadata, :transport, :websocket)}
+        invoke_sink(state.sink_mfa, enriched, state.sink_opts)
 
-    case state.enqueue_fn.(job) do
-      {:ok, _} ->
         Logger.info(
-          "[Mattermost WS] Posted event enqueued post_id=#{post["id"]} " <>
+          "[Mattermost WS] Posted event dispatched post_id=#{post["id"]} " <>
             "root_id=#{inspect(post["root_id"])}"
         )
 
       {:error, reason} ->
-        Logger.error("[Mattermost WS] Failed to enqueue job reason=#{inspect(reason)}")
+        Logger.error(
+          "[Mattermost WS] Failed to transform post post_id=#{post["id"]} reason=#{inspect(reason)}"
+        )
     end
+  end
+
+  defp invoke_sink({module, function, extra_args}, incoming, sink_opts) do
+    apply(module, function, extra_args ++ [incoming, sink_opts])
   end
 end
