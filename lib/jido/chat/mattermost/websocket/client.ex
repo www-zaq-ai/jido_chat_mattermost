@@ -2,27 +2,23 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
   @moduledoc """
   Fresh-based WebSocket client for Mattermost event ingestion.
 
-  On each `posted` event the decoded post is normalized into a
-  `Jido.Chat.Incoming` struct (with `metadata.transport: :websocket`) and
-  forwarded to the configured sink via MFA dispatch:
+  On each `posted` event the raw Mattermost payload is forwarded to the
+  configured sink via MFA dispatch. The sink is responsible for calling
+  `Adapter.transform_incoming/2` to normalize into `%Jido.Chat.Incoming{}`.
 
-      apply(module, function, extra_args ++ [incoming, sink_opts])
+      apply(module, function, extra_args ++ [payload, sink_opts])
 
   ## Flow
 
       Mattermost WS frame
         → handle_in/2 (decode + filter, ~1ms)
-          → Adapter.transform_incoming/2
-          → %Incoming{metadata: %{transport: :websocket}}
-          → apply(sink_module, sink_fun, sink_args ++ [incoming, sink_opts])
+          → raw payload map (post + channel metadata)
+          → apply(sink_module, sink_fun, sink_args ++ [payload, sink_opts])
   """
 
   use Fresh
 
   require Logger
-
-  alias Jido.Chat.Incoming
-  alias Jido.Chat.Mattermost.Adapter
 
   @impl Fresh
   def handle_connect(_status, _headers, state) do
@@ -77,7 +73,7 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
     with {:ok, post} <- decode_post(data),
          true <- not_bot?(post, state),
          true <- in_tracked_channel?(post, channel_type, state) do
-      emit_event(post, state)
+      emit_event(data, post, state)
     end
   end
 
@@ -105,29 +101,20 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
 
   defp in_tracked_channel?(_post, _channel_type, _state), do: true
 
-  defp emit_event(post, state) do
-    adapter_opts = [
-      token: state.token,
-      url: state.url,
-      bot_user_id: state.bot_user_id,
-      bot_name: state.bot_name
-    ]
+  defp emit_event(data, post, state) do
+    payload = %{
+      "post" => post,
+      "channel_type" => Map.get(data, "channel_type"),
+      "channel_display_name" => Map.get(data, "channel_display_name")
+    }
 
-    case Adapter.transform_incoming(%{"post" => post}, adapter_opts) do
-      {:ok, %Incoming{} = incoming} ->
-        enriched = %{incoming | metadata: Map.put(incoming.metadata, :transport, :websocket)}
-        invoke_sink(state.sink_mfa, enriched, state.sink_opts)
+    sink_opts = Keyword.put(state.sink_opts, :transport, "websocket")
+    invoke_sink(state.sink_mfa, payload, sink_opts)
 
-        Logger.info(
-          "[Mattermost WS] Posted event dispatched post_id=#{post["id"]} " <>
-            "root_id=#{inspect(post["root_id"])}"
-        )
-
-      {:error, reason} ->
-        Logger.error(
-          "[Mattermost WS] Failed to transform post post_id=#{post["id"]} reason=#{inspect(reason)}"
-        )
-    end
+    Logger.info(
+      "[Mattermost WS] Posted event dispatched post_id=#{post["id"]} " <>
+        "root_id=#{inspect(post["root_id"])}"
+    )
   end
 
   defp invoke_sink({module, function, extra_args}, incoming, sink_opts) do
