@@ -22,5 +22,4 @@ defmodule Jido.Chat.Mattermost.Channel do
   defdelegate fetch_messages(channel_id, opts), to: Adapter
   defdelegate fetch_channel_messages(channel_id, opts), to: Adapter
   defdelegate listener_child_specs(adapter_config, ingress_config), to: Adapter
-  defdelegate verify_webhook(payload, opts), to: Adapter
 end

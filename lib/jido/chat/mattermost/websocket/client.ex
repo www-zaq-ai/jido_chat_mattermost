@@ -2,9 +2,10 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
   @moduledoc """
   Fresh-based WebSocket client for Mattermost event ingestion.
 
-  On each `posted` event the raw Mattermost payload is forwarded to the
-  configured sink via MFA dispatch. The sink is responsible for calling
-  `Adapter.transform_incoming/2` to normalize into `%Jido.Chat.Incoming{}`.
+  On each `posted` event the raw Mattermost payload map is forwarded to the
+  configured sink via MFA dispatch. The sink receives the raw payload and is
+  responsible for dispatching it through `Jido.Chat.Adapter.transform_incoming/2`
+  (adapter_module, payload) to normalize into `%Jido.Chat.Incoming{}`.
 
       apply(module, function, extra_args ++ [payload, sink_opts])
 

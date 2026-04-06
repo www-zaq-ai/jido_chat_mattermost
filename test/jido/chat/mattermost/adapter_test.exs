@@ -2,7 +2,7 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
   use ExUnit.Case, async: true
 
   alias Jido.Chat.Mattermost.Adapter
-  alias Jido.Chat.{Mention, WebhookRequest}
+  alias Jido.Chat.Mention
 
   # ---------------------------------------------------------------------------
   # Fake transport — canned responses for all callbacks
@@ -306,16 +306,15 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
   # ---------------------------------------------------------------------------
 
   describe "send_message/3" do
-    test "posts to channel and returns post map" do
-      assert {:ok, post} = Adapter.send_message("c1", "hello", fake_opts())
-      assert post["channel_id"] == "c1"
-      assert post["message"] == "hello"
+    test "posts to channel and returns external_message_id" do
+      assert {:ok, resp} = Adapter.send_message("c1", "hello", fake_opts())
+      assert resp["external_message_id"] == "post_123"
     end
 
-    test "includes root_id for thread replies" do
+    test "thread reply returns external_message_id" do
       opts = [transport: FakeTransport, thread_id: "p_root"]
-      assert {:ok, post} = Adapter.send_message("c1", "reply", opts)
-      assert post["root_id"] == "p_root"
+      assert {:ok, resp} = Adapter.send_message("c1", "reply", opts)
+      assert resp["external_message_id"] == "post_123"
     end
   end
 
@@ -371,173 +370,6 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
     test "returns the post by id" do
       assert {:ok, post} = Adapter.fetch_message("c1", "post_abc", fake_opts())
       assert post["id"] == "post_abc"
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # parse_event/2
-  # ---------------------------------------------------------------------------
-
-  describe "parse_event/2" do
-    test "message payload returns :message EventEnvelope" do
-      payload = %{
-        "post" => %{"id" => "p1", "channel_id" => "c1", "root_id" => ""},
-        "channel_type" => "O"
-      }
-
-      assert {:ok, env} = Adapter.parse_event(payload, [])
-      assert env.event_type == :message
-      assert env.channel_id == "c1"
-      assert env.message_id == "p1"
-      assert env.adapter_name == :mattermost
-    end
-
-    test "slash command payload returns :slash_command EventEnvelope" do
-      payload = %{"command" => "/greet", "channel_id" => "c1", "text" => "world"}
-
-      assert {:ok, env} = Adapter.parse_event(payload, [])
-      assert env.event_type == :slash_command
-      assert env.channel_id == "c1"
-    end
-
-    test "thread reply sets thread_id from root_id" do
-      payload = %{
-        "post" => %{"id" => "p2", "channel_id" => "c1", "root_id" => "p_root"},
-        "channel_type" => "O"
-      }
-
-      assert {:ok, env} = Adapter.parse_event(payload, [])
-      assert env.thread_id == "p_root"
-    end
-
-    test "flat outgoing-webhook payload returns :message EventEnvelope" do
-      payload = %{
-        "token" => "tok",
-        "team_id" => "t1",
-        "channel_id" => "c1",
-        "user_id" => "u1",
-        "user_name" => "alice",
-        "post_id" => "p1",
-        "text" => "hello from webhook",
-        "trigger_word" => ""
-      }
-
-      assert {:ok, env} = Adapter.parse_event(payload, [])
-      assert env.event_type == :message
-      assert env.channel_id == "c1"
-      assert env.message_id == "p1"
-      assert env.thread_id == nil
-    end
-
-    test "flat outgoing-webhook thread reply sets thread_id" do
-      payload = %{
-        "token" => "tok",
-        "channel_id" => "c1",
-        "user_id" => "u1",
-        "post_id" => "p2",
-        "text" => "thread reply",
-        "root_id" => "p_root"
-      }
-
-      assert {:ok, env} = Adapter.parse_event(payload, [])
-      assert env.event_type == :message
-      assert env.thread_id == "p_root"
-    end
-
-    test "unknown payload returns :noop" do
-      assert {:ok, :noop} = Adapter.parse_event(%{"unknown" => "payload"}, [])
-    end
-
-    test "WebhookRequest delegates to payload" do
-      request =
-        WebhookRequest.new(%{
-          "post" => %{"id" => "p1", "channel_id" => "c1", "root_id" => ""}
-        })
-
-      assert {:ok, env} = Adapter.parse_event(request, [])
-      assert env.event_type == :message
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # format_webhook_response/2
-  # ---------------------------------------------------------------------------
-
-  describe "format_webhook_response/2" do
-    test "text string returns 200 with in_channel body" do
-      response = Adapter.format_webhook_response({:ok, "hello"}, [])
-      assert response.status == 200
-      assert response.body["text"] == "hello"
-      assert response.body["response_type"] == "in_channel"
-    end
-
-    test "text map body passes through" do
-      response = Adapter.format_webhook_response({:ok, %{"text" => "hi"}}, [])
-      assert response.status == 200
-      assert response.body["text"] == "hi"
-    end
-
-    test ":ok returns accepted" do
-      response = Adapter.format_webhook_response(:ok, [])
-      assert response.status == 200
-    end
-
-    test "error returns 500" do
-      response = Adapter.format_webhook_response({:error, :something_failed}, [])
-      assert response.status == 500
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # verify_webhook/2
-  # ---------------------------------------------------------------------------
-
-  describe "verify_webhook/2" do
-    test "accepts matching token" do
-      assert :ok = Adapter.verify_webhook(%{"token" => "secret"}, token: "secret")
-    end
-
-    test "rejects wrong token" do
-      assert {:error, :invalid_webhook_token} =
-               Adapter.verify_webhook(%{"token" => "wrong"}, token: "secret")
-    end
-
-    test "rejects missing token in payload" do
-      assert {:error, :invalid_webhook_token} =
-               Adapter.verify_webhook(%{}, token: "secret")
-    end
-
-    test "rejects non-map payload" do
-      assert {:error, :invalid_payload} = Adapter.verify_webhook("oops", token: "secret")
-    end
-
-    test "accepts WebhookRequest with matching token" do
-      request = WebhookRequest.new(%{"token" => "secret"})
-      assert :ok = Adapter.verify_webhook(request, token: "secret")
-    end
-
-    test "rejects WebhookRequest with wrong token" do
-      request = WebhookRequest.new(%{"token" => "bad"})
-      assert {:error, :invalid_webhook_token} = Adapter.verify_webhook(request, token: "secret")
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # listener_child_specs/2
-  # ---------------------------------------------------------------------------
-
-  describe "listener_child_specs/2" do
-    test "returns empty list for webhook mode" do
-      assert {:ok, []} = Adapter.listener_child_specs("bridge_1", ingress: [mode: "webhook"])
-    end
-
-    test "returns empty list when mode absent (defaults to webhook)" do
-      assert {:ok, []} = Adapter.listener_child_specs("bridge_1", [])
-    end
-
-    test "returns error for unsupported mode" do
-      assert {:error, {:unsupported_ingress_mode, "socket"}} =
-               Adapter.listener_child_specs("bridge_1", ingress: [mode: "socket"])
     end
   end
 end

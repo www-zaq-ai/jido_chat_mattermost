@@ -24,12 +24,22 @@ defmodule Jido.Chat.Mattermost.Adapter do
   receives normalized `%Incoming{}` structs.
   """
 
-  @behaviour Jido.Chat.Adapter
+  use Jido.Chat.Adapter
 
   require Logger
 
-  alias Jido.Chat.{ChannelMeta, Incoming, Mention}
-  alias Jido.Chat.Mattermost.Transport.ReqClient
+  alias Jido.Chat.Mattermost.{
+    DeleteOptions,
+    EditOptions,
+    FetchOptions,
+    MetadataOptions,
+    ReactionOptions,
+    SendOptions,
+    Transport.ReqClient,
+    TypingOptions
+  }
+
+  alias Jido.Chat.Mention
 
   # --- Adapter identity ---
 
@@ -68,9 +78,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
   # --- Incoming payload normalization ---
 
   @impl true
-  def transform_incoming(payload, opts \\ [])
-
-  def transform_incoming(%{"post" => post} = payload, opts) when is_map(post) do
+  def transform_incoming(%{"post" => post} = payload) when is_map(post) do
     text = Map.get(post, "message", "")
     user_id = Map.get(post, "user_id")
     channel_id = Map.get(post, "channel_id")
@@ -82,99 +90,140 @@ defmodule Jido.Chat.Mattermost.Adapter do
     channel_display_name = Map.get(payload, "channel_display_name")
 
     media = extract_media(metadata)
-    {was_mentioned, mentions} = extract_mentions(payload, post, text, opts)
+    {was_mentioned, mentions} = extract_mentions(payload, post, text)
 
-    incoming =
-      Incoming.new(%{
-        text: text,
-        external_user_id: user_id,
-        external_room_id: channel_id,
-        external_message_id: post_id,
-        external_thread_id: root_id,
-        chat_title: channel_display_name,
-        chat_type: mattermost_channel_type(channel_type),
-        media: media,
-        was_mentioned: was_mentioned,
-        mentions: mentions,
-        raw: payload,
-        channel_meta: %ChannelMeta{
-          adapter_name: :mattermost,
-          external_room_id: channel_id,
-          external_thread_id: root_id,
-          chat_type: mattermost_channel_type(channel_type),
-          chat_title: channel_display_name,
-          is_dm: channel_type == "D"
-        }
-      })
-
-    {:ok, incoming}
+    {:ok,
+     %{
+       text: text,
+       external_user_id: user_id,
+       external_room_id: channel_id,
+       external_message_id: post_id,
+       external_thread_id: root_id,
+       chat_title: channel_display_name,
+       chat_type: mattermost_channel_type(channel_type),
+       media: media,
+       was_mentioned: was_mentioned,
+       mentions: mentions,
+       raw: payload,
+       channel_meta: %{
+         adapter_name: :mattermost,
+         external_room_id: channel_id,
+         external_thread_id: root_id,
+         chat_type: mattermost_channel_type(channel_type),
+         chat_title: channel_display_name,
+         is_dm: channel_type == "D"
+       }
+     }}
   end
 
-  def transform_incoming(_payload, _opts), do: {:error, :invalid_payload}
+  def transform_incoming(%{"channel_id" => channel_id, "user_id" => user_id} = payload)
+      when is_binary(channel_id) and is_binary(user_id) do
+    text = Map.get(payload, "text", "")
+    post_id = Map.get(payload, "post_id")
+    root_id = nilify(Map.get(payload, "root_id"))
+    channel_type = Map.get(payload, "channel_type")
+    channel_display_name = Map.get(payload, "channel_display_name")
+
+    {:ok,
+     %{
+       text: text,
+       external_user_id: user_id,
+       external_room_id: channel_id,
+       external_message_id: post_id,
+       external_thread_id: root_id,
+       chat_title: channel_display_name,
+       chat_type: mattermost_channel_type(channel_type),
+       media: [],
+       was_mentioned: false,
+       mentions: [],
+       raw: payload,
+       channel_meta: %{
+         adapter_name: :mattermost,
+         external_room_id: channel_id,
+         external_thread_id: root_id,
+         chat_type: mattermost_channel_type(channel_type),
+         chat_title: channel_display_name,
+         is_dm: channel_type == "D"
+       }
+     }}
+  end
+
+  def transform_incoming(_payload), do: {:error, :invalid_payload}
 
   # --- Send / Edit / Delete ---
 
   @impl true
   def send_message(channel_id, text, opts \\ []) do
-    with {:ok, resp} <- transport(opts).send_message(channel_id, text, transport_opts(opts)) do
-      {:ok, Map.put(resp, "external_message_id", resp["id"])}
+    o = SendOptions.new(opts)
+
+    with {:ok, resp} <- transport(o).send_message(channel_id, text, SendOptions.transport_opts(o)) do
+      {:ok, %{"external_message_id" => Map.get(resp, "id")}}
     end
   end
 
   @impl true
   def edit_message(channel_id, post_id, text, opts \\ []) do
-    transport(opts).edit_message(channel_id, post_id, text, transport_opts(opts))
+    o = EditOptions.new(opts)
+    transport(o).edit_message(channel_id, post_id, text, EditOptions.transport_opts(o))
   end
 
   @impl true
   def delete_message(channel_id, post_id, opts \\ []) do
-    transport(opts).delete_message(channel_id, post_id, transport_opts(opts))
+    o = DeleteOptions.new(opts)
+    transport(o).delete_message(channel_id, post_id, DeleteOptions.transport_opts(o))
   end
 
   # --- Typing ---
 
   @impl true
   def start_typing(channel_id, opts \\ []) do
-    transport(opts).send_typing(channel_id, transport_opts(opts))
+    o = TypingOptions.new(opts)
+    transport(o).send_typing(channel_id, TypingOptions.transport_opts(o))
   end
 
   # --- Metadata ---
 
   @impl true
   def fetch_metadata(channel_id, opts \\ []) do
-    transport(opts).fetch_channel(channel_id, transport_opts(opts))
+    o = MetadataOptions.new(opts)
+    transport(o).fetch_channel(channel_id, MetadataOptions.transport_opts(o))
   end
 
   # --- Thread / Message fetch ---
 
   @impl true
   def fetch_thread(root_id, opts \\ []) do
-    transport(opts).fetch_thread(root_id, transport_opts(opts))
+    o = FetchOptions.new(opts)
+    transport(o).fetch_thread(root_id, FetchOptions.transport_opts(o))
   end
 
   @impl true
   def fetch_message(_channel_id, post_id, opts \\ []) do
-    transport(opts).fetch_post(post_id, transport_opts(opts))
+    o = FetchOptions.new(opts)
+    transport(o).fetch_post(post_id, FetchOptions.transport_opts(o))
   end
 
   # --- Reactions ---
 
   @impl true
   def add_reaction(_channel_id, post_id, emoji, opts \\ []) do
-    transport(opts).add_reaction(post_id, emoji, transport_opts(opts))
+    o = ReactionOptions.new(opts)
+    transport(o).add_reaction(post_id, emoji, ReactionOptions.transport_opts(o))
   end
 
   @impl true
   def remove_reaction(_channel_id, post_id, emoji, opts \\ []) do
-    user_id = opts[:user_id] || raise ":user_id is required for remove_reaction"
-    transport(opts).remove_reaction(post_id, emoji, user_id, transport_opts(opts))
+    o = ReactionOptions.new(opts)
+    user_id = o.user_id || raise ":user_id is required for remove_reaction"
+    transport(o).remove_reaction(post_id, emoji, user_id, ReactionOptions.transport_opts(o))
   end
 
   # --- Message history ---
 
   @impl true
   def fetch_messages(channel_id, opts \\ []) do
-    transport(opts).fetch_posts(channel_id, transport_opts(opts))
+    o = FetchOptions.new(opts)
+    transport(o).fetch_posts(channel_id, FetchOptions.transport_opts(o))
   end
 
   @impl true
@@ -186,17 +235,14 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   @impl true
   def listener_child_specs(bridge_id, opts) do
-    opts_with_bridge = Keyword.put(opts, :bridge_id, bridge_id)
-    {:ok, [Jido.Chat.Mattermost.Listener.child_spec(opts_with_bridge)]}
+    opts = Keyword.put_new(opts, :bridge_id, bridge_id)
+    {:ok, [Jido.Chat.Mattermost.Listener.child_spec(opts)]}
   end
 
   # --- Private helpers ---
 
-  defp transport(opts), do: opts[:transport] || ReqClient
-
-  defp transport_opts(opts) do
-    Keyword.take(opts, [:token, :url, :thread_id, :user_id, :limit, :before, :after])
-  end
+  defp transport(%{transport: mod}) when not is_nil(mod), do: mod
+  defp transport(_), do: ReqClient
 
   defp extract_media(%{"files" => files}) when is_list(files) do
     Enum.map(files, fn file ->
@@ -218,9 +264,9 @@ defmodule Jido.Chat.Mattermost.Adapter do
   defp mattermost_channel_type("O"), do: :public
   defp mattermost_channel_type(_), do: :channel
 
-  defp extract_mentions(_payload, post, text, opts) do
-    bot_name = opts[:bot_name] || Application.get_env(:jido_chat_mattermost, :bot_name)
-    bot_user_id = opts[:bot_user_id] || Application.get_env(:jido_chat_mattermost, :bot_user_id)
+  defp extract_mentions(_payload, post, text) do
+    bot_name = Application.get_env(:jido_chat_mattermost, :bot_name)
+    bot_user_id = Application.get_env(:jido_chat_mattermost, :bot_user_id)
 
     user_ids =
       post
