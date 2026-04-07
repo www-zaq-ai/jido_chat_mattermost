@@ -92,10 +92,17 @@ defmodule Jido.Chat.Mattermost.Adapter do
     media = extract_media(metadata)
     {was_mentioned, mentions} = extract_mentions(payload, post, text)
 
+    bot_user_id = Application.get_env(:jido_chat_mattermost, :bot_user_id)
+
     {:ok,
      %{
        text: text,
        external_user_id: user_id,
+       author: %{
+         user_id: user_id || "",
+         user_name: user_id || "",
+         is_me: is_binary(user_id) && user_id == bot_user_id
+       },
        external_room_id: channel_id,
        external_message_id: post_id,
        external_thread_id: root_id,
@@ -156,9 +163,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
   def send_message(channel_id, text, opts \\ []) do
     o = SendOptions.new(opts)
 
-    with {:ok, resp} <- transport(o).send_message(channel_id, text, SendOptions.transport_opts(o)) do
-      {:ok, %{"external_message_id" => Map.get(resp, "id")}}
-    end
+    transport(o).send_message(channel_id, text, SendOptions.transport_opts(o))
   end
 
   @impl true
@@ -229,6 +234,25 @@ defmodule Jido.Chat.Mattermost.Adapter do
   @impl true
   def fetch_channel_messages(channel_id, opts \\ []) do
     fetch_messages(channel_id, opts)
+  end
+
+  # --- User profile ---
+
+  def get_user(user_id, opts \\ []) do
+    o = FetchOptions.new(opts)
+
+    with {:ok, user} <- transport(o).get_user(user_id, FetchOptions.transport_opts(o)) do
+      display_name =
+        [user["first_name"], user["last_name"]]
+        |> Enum.reject(&(is_nil(&1) || &1 == ""))
+        |> Enum.join(" ")
+        |> case do
+          "" -> user["username"]
+          name -> name
+        end
+
+      {:ok, Map.put(user, "display_name", display_name)}
+    end
   end
 
   # --- Listener / ingress ---

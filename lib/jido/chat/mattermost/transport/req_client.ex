@@ -68,6 +68,11 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClient do
     end
   end
 
+  @impl true
+  def get_user(user_id, opts) do
+    get("/api/v4/users/#{user_id}", [], opts)
+  end
+
   @doc "Lists all teams the bot belongs to."
   def list_teams(opts) do
     get("/api/v4/users/me/teams", [], opts)

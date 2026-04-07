@@ -45,4 +45,7 @@ defmodule Jido.Chat.Mattermost.Transport do
 
   @callback send_typing(channel_id :: String.t(), opts :: keyword()) ::
               :ok | {:error, term()}
+
+  @callback get_user(user_id :: String.t(), opts :: keyword()) ::
+              {:ok, map()} | {:error, term()}
 end
