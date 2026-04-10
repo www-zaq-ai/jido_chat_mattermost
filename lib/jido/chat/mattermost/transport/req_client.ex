@@ -73,6 +73,18 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClient do
     get("/api/v4/users/#{user_id}", [], opts)
   end
 
+  @doc """
+  Creates or returns the existing DM channel between two users.
+
+  Requires the bot user ID and the target user ID. Returns the channel map on
+  success, including `"id"` which can be used as a `channel_id` for sending.
+
+      ReqClient.open_dm_channel(bot_user_id, target_user_id, opts)
+  """
+  def open_dm_channel(bot_user_id, target_user_id, opts) do
+    post("/api/v4/channels/direct", [bot_user_id, target_user_id], opts)
+  end
+
   @doc "Lists all teams the bot belongs to."
   def list_teams(opts) do
     get("/api/v4/users/me/teams", [], opts)
