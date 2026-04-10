@@ -21,12 +21,23 @@ def deps do
 end
 ```
 
+## Configuration
+
+Token and base URL can be provided per-call via opts or set globally:
+
+```elixir
+# config/runtime.exs
+config :jido_chat_mattermost,
+  url: "https://mattermost.yourcompany.com",
+  token: System.get_env("MATTERMOST_BOT_TOKEN")
+```
+
 ## Usage
 
 ```elixir
 alias Jido.Chat.Mattermost.Adapter
 
-# Normalize an inbound Mattermost webhook payload
+# Normalize an inbound Mattermost event payload
 {:ok, incoming} =
   Adapter.transform_incoming(%{
     "post" => %{
@@ -46,60 +57,86 @@ alias Jido.Chat.Mattermost.Adapter
 # Reply in a thread
 {:ok, sent} = Adapter.send_message("ch001", "reply text", token: "my-token", thread_id: "root-post-id")
 
+# Edit a message
+{:ok, updated} = Adapter.edit_message("ch001", "post-id", "updated text", token: "my-token")
+
+# Delete a message
+{:ok, _} = Adapter.delete_message("ch001", "post-id", token: "my-token")
+
 # Add a reaction
 :ok = Adapter.add_reaction("ch001", "post-id", "white_check_mark", token: "my-token")
+
+# Remove a reaction
+:ok = Adapter.remove_reaction("ch001", "post-id", "white_check_mark", token: "my-token", user_id: "usr001")
 
 # Fetch last 10 messages
 {:ok, page} = Adapter.fetch_messages("ch001", limit: 10, token: "my-token")
 
-# Fetch a specific post (e.g. from a shared post reference)
+# Fetch a specific post
 {:ok, message} = Adapter.fetch_message("ch001", "post-id", token: "my-token")
+
+# Fetch a thread by root post ID
+{:ok, thread} = Adapter.fetch_thread("root-post-id", token: "my-token")
+
+# Look up a user (returns the Mattermost user map with a synthesized "display_name" key)
+{:ok, user} = Adapter.get_user("usr001", token: "my-token")
+
+# Open (or retrieve) a DM channel between the bot and a user
+{:ok, channel} = Adapter.open_dm_channel("bot-user-id", "target-user-id", token: "my-token")
 ```
 
-## Ingress Modes (`listener_child_specs/2`)
+## Ingress (WebSocket Listener)
 
-Mattermost uses **outgoing webhooks** — there is no persistent gateway connection.
-
-`Jido.Chat.Mattermost.Adapter.listener_child_specs/2` always returns `{:ok, []}`. The host application is responsible for receiving webhook HTTP requests and routing them through `Jido.Chat.handle_webhook_request/4`.
+Mattermost ingress uses a **persistent WebSocket connection** (`/api/v4/websocket`).
+`listener_child_specs/2` returns a child spec for `Jido.Chat.Mattermost.Listener`, which
+wraps a Fresh-based WebSocket client. Add it to your supervision tree:
 
 ```elixir
-chat =
-  Jido.Chat.new(user_name: "zaq", adapters: %{mattermost: Jido.Chat.Mattermost.Adapter})
-  |> Jido.Chat.on_new_mention(fn thread, incoming ->
-    # incoming is a normalized %Jido.Chat.Incoming{}
-    Jido.Chat.Thread.post(thread, "Hello #{incoming.display_name}!")
-  end)
-
-# In your webhook controller:
-{:ok, chat, _envelope, response} =
-  Jido.Chat.handle_webhook_request(chat, :mattermost, conn.body_params, token: "my-token")
+children = [
+  Jido.Chat.Mattermost.Listener.child_spec(
+    bridge_id: :my_bot,
+    url: "https://mattermost.yourcompany.com",
+    token: System.get_env("MATTERMOST_BOT_TOKEN"),
+    bot_user_id: "bot-user-id",
+    bot_name: "zaq",
+    channel_ids: :all,                            # or a list of channel ID strings
+    sink_mfa: {MyApp.Handler, :handle_incoming, []}
+  )
+]
 ```
 
-## Configuration
+Each incoming WebSocket event is normalized to a `%Jido.Chat.Incoming{}` struct and
+delivered via `sink_mfa`. Multiple Mattermost instances can coexist on the same node
+by using distinct `bridge_id` values.
 
-Token and base URL can be provided per-call via opts or set globally:
+## Transport
+
+The default HTTP transport is `Jido.Chat.Mattermost.Transport.ReqClient`. Swap it out
+for tests by injecting a module that implements the `Jido.Chat.Mattermost.Transport`
+behaviour:
 
 ```elixir
-# config/runtime.exs
-config :jido_chat_mattermost,
-  url: "https://mattermost.yourcompany.com",
-  token: System.get_env("MATTERMOST_BOT_TOKEN")
+Adapter.send_message("ch001", "hello", transport: MyFakeTransport, token: "x")
 ```
 
 ## Capability Matrix
 
 | Capability | Status |
 |---|---|
-| send / edit / delete message | native |
+| send message | native |
+| edit message | native |
+| delete message | native |
 | start typing | native |
 | fetch channel metadata | native |
 | fetch thread | native |
 | fetch message by ID | native |
-| add / remove reaction | native |
+| add reaction | native |
+| remove reaction | native |
 | fetch messages (history) | native |
-| webhook ingress + verification | native |
-| send file | unsupported (tracked upstream) |
-| ephemeral message | unsupported |
-| open DM | unsupported |
+| fetch channel messages | native |
+| open DM channel | native |
+| post ephemeral message | unsupported |
 | list threads | unsupported |
 | modal | unsupported |
+| webhook ingress | unsupported |
+| send file | unsupported |
