@@ -61,7 +61,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
       fetch_messages: :native,
       fetch_channel_messages: :native,
       post_ephemeral: :unsupported,
-      open_dm: :unsupported,
+      open_dm: :native,
       list_threads: :unsupported,
       open_modal: :unsupported,
       webhook: :unsupported,
@@ -253,6 +253,14 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
       {:ok, Map.put(user, "display_name", display_name)}
     end
+  end
+
+  # --- DM channel ---
+
+  @doc "Opens or returns the existing DM channel between the bot and a target user."
+  def open_dm_channel(bot_user_id, target_user_id, opts \\ []) do
+    o = FetchOptions.new(opts)
+    transport(o).open_dm_channel(bot_user_id, target_user_id, FetchOptions.transport_opts(o))
   end
 
   # --- Listener / ingress ---
