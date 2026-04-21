@@ -9,6 +9,8 @@ defmodule Jido.Chat.Mattermost.DeleteOptions do
           url: String.t() | nil
         }
 
+  @doc "Builds delete options from a keyword list."
+  @spec new(keyword()) :: t()
   def new(opts \\ []) do
     %__MODULE__{
       token: opts[:token],
@@ -17,6 +19,8 @@ defmodule Jido.Chat.Mattermost.DeleteOptions do
     }
   end
 
+  @doc "Extracts transport options for delete requests."
+  @spec transport_opts(t()) :: keyword()
   def transport_opts(%__MODULE__{} = o) do
     []
     |> maybe_put(:token, o.token)

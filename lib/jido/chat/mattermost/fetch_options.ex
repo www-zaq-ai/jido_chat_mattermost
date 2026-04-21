@@ -19,6 +19,8 @@ defmodule Jido.Chat.Mattermost.FetchOptions do
           url: String.t() | nil
         }
 
+  @doc "Builds fetch options from a keyword list."
+  @spec new(keyword()) :: t()
   def new(opts \\ []) do
     %__MODULE__{
       limit: opts[:limit] || 60,
@@ -31,6 +33,8 @@ defmodule Jido.Chat.Mattermost.FetchOptions do
     }
   end
 
+  @doc "Extracts transport options for fetch requests."
+  @spec transport_opts(t()) :: keyword()
   def transport_opts(%__MODULE__{} = o) do
     []
     |> maybe_put(:limit, o.limit)

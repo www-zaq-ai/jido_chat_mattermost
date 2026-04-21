@@ -2,9 +2,9 @@
 
 `jido_chat_mattermost` is the Mattermost adapter package for `jido_chat`.
 
-## Experimental Status
+## Release Status
 
-This package is experimental and pre-1.0. APIs and behavior will change. It is part of the Elixir implementation aligned to the Vercel Chat SDK ([chat-sdk.dev/docs](https://www.chat-sdk.dev/docs)).
+This package is being prepared for the Jido 1.x chat package release line. It is part of the Elixir implementation aligned to the Vercel Chat SDK ([chat-sdk.dev/docs](https://www.chat-sdk.dev/docs)).
 
 `Jido.Chat.Mattermost.Adapter` is the canonical adapter module and uses `Req` as the HTTP transport against the Mattermost REST API v4.
 

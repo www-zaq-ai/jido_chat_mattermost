@@ -10,6 +10,8 @@ defmodule Jido.Chat.Mattermost.ReactionOptions do
           url: String.t() | nil
         }
 
+  @doc "Builds reaction options from a keyword list."
+  @spec new(keyword()) :: t()
   def new(opts \\ []) do
     %__MODULE__{
       user_id: opts[:user_id],
@@ -19,6 +21,8 @@ defmodule Jido.Chat.Mattermost.ReactionOptions do
     }
   end
 
+  @doc "Extracts transport options for reaction requests."
+  @spec transport_opts(t()) :: keyword()
   def transport_opts(%__MODULE__{} = o) do
     []
     |> maybe_put(:user_id, o.user_id)

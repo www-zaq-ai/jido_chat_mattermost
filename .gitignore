@@ -10,8 +10,19 @@
 # Where third-party dependencies like ExDoc output generated docs.
 /doc/
 
+# Dialyzer PLT files.
+/priv/plts/
+*.plt
+*.plt.hash
+
 # Temporary files, for example, from tests.
 /tmp/
+
+# Editor/IDE
+.elixir_ls/
+.vscode/
+*.swp
+*.swo
 
 # If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
@@ -29,3 +40,12 @@ plan/
 
 # Serena MCP local project files
 .serena/
+
+# Local dotenv files (keep .env.example committed).
+.env
+.env.test
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
