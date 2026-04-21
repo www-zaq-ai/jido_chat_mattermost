@@ -11,10 +11,32 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClient do
 
   @impl true
   def send_message(channel_id, text, opts) do
-    body = Map.merge(%{"channel_id" => channel_id, "message" => text}, thread_params(opts))
+    body =
+      %{"channel_id" => channel_id, "message" => text || ""}
+      |> Map.merge(thread_params(opts))
+      |> maybe_put_body("file_ids", opts[:file_ids])
 
     post("/api/v4/posts", body, opts)
   end
+
+  @impl true
+  def upload_file(channel_id, %{path: path} = file, opts)
+      when is_binary(path) and path != "" do
+    file_part =
+      {File.stream!(path, [], 2048),
+       multipart_file_options(file, Map.get(file, :filename) || Path.basename(path))}
+
+    post_multipart("/api/v4/files", [channel_id: channel_id, files: file_part], opts)
+  end
+
+  def upload_file(channel_id, %{body: body, filename: filename} = file, opts)
+      when is_binary(body) and body != "" and is_binary(filename) and filename != "" do
+    file_part = {body, multipart_file_options(file, filename)}
+
+    post_multipart("/api/v4/files", [channel_id: channel_id, files: file_part], opts)
+  end
+
+  def upload_file(_channel_id, _file, _opts), do: {:error, :missing_file_source}
 
   @impl true
   def edit_message(_channel_id, post_id, text, opts) do
@@ -127,6 +149,15 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClient do
   defp maybe_put(params, _key, nil), do: params
   defp maybe_put(params, key, value), do: [{key, value} | params]
 
+  defp maybe_put_body(body, _key, value) when value in [nil, []], do: body
+  defp maybe_put_body(body, key, value), do: Map.put(body, key, value)
+
+  defp multipart_file_options(file, filename) do
+    []
+    |> Keyword.put(:filename, filename)
+    |> maybe_put(:content_type, Map.get(file, :content_type))
+  end
+
   defp base_url(opts) do
     opts[:url] || Application.get_env(:jido_chat_mattermost, :url) ||
       raise "Mattermost URL not configured. Set opts[:url] or config :jido_chat_mattermost, url: ..."
@@ -143,6 +174,16 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClient do
     url = base_url(opts) <> path
 
     case Req.post(url, json: body, headers: auth_headers(opts)) do
+      {:ok, %{status: status, body: resp_body}} when status in 200..299 -> {:ok, resp_body}
+      {:ok, %{status: status, body: resp_body}} -> {:error, {status, resp_body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp post_multipart(path, form, opts) do
+    url = base_url(opts) <> path
+
+    case Req.post(url, form_multipart: form, headers: auth_headers(opts)) do
       {:ok, %{status: status, body: resp_body}} when status in 200..299 -> {:ok, resp_body}
       {:ok, %{status: status, body: resp_body}} -> {:error, {status, resp_body}}
       {:error, reason} -> {:error, reason}

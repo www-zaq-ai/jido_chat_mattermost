@@ -57,6 +57,14 @@ alias Jido.Chat.Mattermost.Adapter
 # Reply in a thread
 {:ok, sent} = Adapter.send_message("ch001", "reply text", token: "my-token", thread_id: "root-post-id")
 
+# Upload and send a file
+{:ok, sent} =
+  Adapter.send_file("ch001",
+    %{path: "/tmp/report.pdf", filename: "report.pdf", media_type: "application/pdf"},
+    token: "my-token",
+    caption: "Latest report"
+  )
+
 # Edit a message
 {:ok, updated} = Adapter.edit_message("ch001", "post-id", "updated text", token: "my-token")
 
@@ -139,4 +147,4 @@ Adapter.send_message("ch001", "hello", transport: MyFakeTransport, token: "x")
 | list threads | unsupported |
 | modal | unsupported |
 | webhook ingress | unsupported |
-| send file | unsupported |
+| send file | native |

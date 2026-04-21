@@ -36,24 +36,22 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
 
   @impl Fresh
   def handle_in({:text, data}, state) do
-    try do
-      case Jason.decode(data) do
-        {:ok, %{"event" => "posted"} = event} ->
-          handle_posted(event, state)
-          {:ok, state}
+    case Jason.decode(data) do
+      {:ok, %{"event" => "posted"} = event} ->
+        handle_posted(event, state)
+        {:ok, state}
 
-        {:ok, _event} ->
-          {:ok, state}
+      {:ok, _event} ->
+        {:ok, state}
 
-        {:error, reason} ->
-          Logger.warning("[Mattermost WS] JSON decode failed reason=#{inspect(reason)}")
-          {:ok, state}
-      end
-    rescue
-      e ->
-        Logger.warning("[Mattermost WS] Exception in handle_in: #{Exception.message(e)}")
+      {:error, reason} ->
+        Logger.warning("[Mattermost WS] JSON decode failed reason=#{inspect(reason)}")
         {:ok, state}
     end
+  rescue
+    e ->
+      Logger.warning("[Mattermost WS] Exception in handle_in: #{Exception.message(e)}")
+      {:ok, state}
   end
 
   def handle_in(_frame, state), do: {:ok, state}

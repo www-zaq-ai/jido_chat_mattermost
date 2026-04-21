@@ -22,6 +22,15 @@ defmodule Jido.Chat.Mattermost.MixProject do
     [extra_applications: [:logger]]
   end
 
+  def cli do
+    [
+      preferred_envs: [
+        quality: :test,
+        q: :test
+      ]
+    ]
+  end
+
   defp deps do
     [
       {:jido_chat, github: "agentjido/jido_chat", branch: "main"},
