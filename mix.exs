@@ -55,7 +55,7 @@ defmodule Jido.Chat.Mattermost.MixProject do
 
   defp deps do
     [
-      {:jido_chat, path: "../jido_chat"},
+      {:jido_chat, github: "agentjido/jido_chat", branch: "main"},
       {:req, "~> 0.5"},
       {:fresh, "~> 0.4"},
       {:jason, "~> 1.4"},
