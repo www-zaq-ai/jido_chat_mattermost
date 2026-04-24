@@ -1,6 +1,7 @@
 defmodule Jido.Chat.Mattermost.AdapterTest do
   use ExUnit.Case, async: true
 
+  alias Jido.Chat.{ChannelInfo, Response, Thread}
   alias Jido.Chat.Mattermost.Adapter
   alias Jido.Chat.Mention
 
@@ -64,6 +65,20 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
 
     @impl true
     def send_typing(_channel_id, _opts), do: :ok
+
+    @impl true
+    def get_user(user_id, _opts) do
+      {:ok, %{"id" => user_id, "username" => "test-user"}}
+    end
+
+    @impl true
+    def open_dm_channel(bot_user_id, target_user_id, _opts) do
+      {:ok,
+       %{
+         "id" => "dm_#{bot_user_id}_#{target_user_id}",
+         "type" => "D"
+       }}
+    end
   end
 
   defp fake_opts, do: [transport: FakeTransport]
@@ -306,15 +321,72 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
   # ---------------------------------------------------------------------------
 
   describe "send_message/3" do
-    test "posts to channel and returns external_message_id" do
+    test "posts to channel and returns a normalized response" do
       assert {:ok, resp} = Adapter.send_message("c1", "hello", fake_opts())
-      assert resp["external_message_id"] == "post_123"
+      assert %Response{} = resp
+      assert resp.external_message_id == "post_123"
+      assert resp.external_room_id == "c1"
+      assert resp.channel_type == :mattermost
     end
 
-    test "thread reply returns external_message_id" do
+    test "thread reply keeps thread metadata on the response" do
       opts = [transport: FakeTransport, thread_id: "p_root"]
       assert {:ok, resp} = Adapter.send_message("c1", "reply", opts)
-      assert resp["external_message_id"] == "post_123"
+      assert %Response{} = resp
+      assert resp.external_message_id == "post_123"
+      assert resp.metadata.root_id == "p_root"
+    end
+
+    test "generic reply routing maps to mattermost root thread id" do
+      opts = [transport: FakeTransport, reply_to_id: "p_root"]
+      assert {:ok, resp} = Adapter.send_message("c1", "reply", opts)
+      assert %Response{} = resp
+      assert resp.metadata.root_id == "p_root"
+    end
+  end
+
+  describe "adapter capabilities" do
+    test "declares explicit compatibility surface" do
+      caps = Adapter.capabilities()
+
+      assert caps.send_message == :native
+      assert caps.send_file == :unsupported
+      assert caps.post_message == :fallback
+      assert caps.open_dm == :native
+      assert caps.open_thread == :native
+
+      assert :ok = Jido.Chat.Adapter.validate_capabilities(Adapter)
+    end
+  end
+
+  describe "fetch_metadata/2" do
+    test "returns normalized channel info" do
+      assert {:ok, info} = Adapter.fetch_metadata("c1", fake_opts())
+      assert %ChannelInfo{} = info
+      assert info.id == "c1"
+      assert info.name == "test-channel"
+      assert info.is_dm == false
+    end
+  end
+
+  describe "open_thread/3" do
+    test "returns a normalized thread rooted at the post id" do
+      assert {:ok, thread} = Adapter.open_thread("c1", "post_abc", fake_opts())
+      assert %Thread{} = thread
+      assert thread.external_room_id == "c1"
+      assert thread.external_thread_id == "post_abc"
+    end
+  end
+
+  describe "open_dm/2" do
+    test "returns the DM channel id for a target user" do
+      opts = [transport: FakeTransport, bot_user_id: "bot_1"]
+      assert {:ok, channel_id} = Adapter.open_dm("user_2", opts)
+      assert channel_id == "dm_bot_1_user_2"
+    end
+
+    test "returns an error when bot_user_id is missing" do
+      assert {:error, :bot_user_id_required} = Adapter.open_dm("user_2", fake_opts())
     end
   end
 

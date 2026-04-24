@@ -13,7 +13,7 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
     config_id: 42
   }
 
-  defp posted_frame(post_attrs \\ %{}) do
+  defp posted_frame(post_attrs) do
     post =
       Map.merge(
         %{
@@ -40,8 +40,7 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
     test "sends authentication_challenge with bot token" do
       {:reply, [{:text, json}], _state} = Client.handle_connect(101, [], @base_state)
 
-      assert {:ok,
-              %{"action" => "authentication_challenge", "data" => %{"token" => "test-token"}}} =
+      assert {:ok, %{"action" => "authentication_challenge", "data" => %{"token" => "test-token"}}} =
                Jason.decode(json)
     end
 

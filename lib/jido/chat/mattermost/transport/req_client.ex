@@ -81,6 +81,7 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClient do
 
       ReqClient.open_dm_channel(bot_user_id, target_user_id, opts)
   """
+  @impl true
   def open_dm_channel(bot_user_id, target_user_id, opts) do
     post("/api/v4/channels/direct", [bot_user_id, target_user_id], opts)
   end

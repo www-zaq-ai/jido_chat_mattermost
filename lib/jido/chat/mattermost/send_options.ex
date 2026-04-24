@@ -11,9 +11,10 @@ defmodule Jido.Chat.Mattermost.SendOptions do
         }
 
   @doc "Build a `SendOptions` from a keyword list."
+  @spec new(keyword()) :: t()
   def new(opts \\ []) do
     %__MODULE__{
-      thread_id: opts[:thread_id],
+      thread_id: opts[:thread_id] || opts[:external_thread_id] || opts[:reply_to_id],
       token: opts[:token],
       transport: opts[:transport],
       url: opts[:url]
@@ -21,6 +22,7 @@ defmodule Jido.Chat.Mattermost.SendOptions do
   end
 
   @doc "Extract the keyword opts the transport layer needs."
+  @spec transport_opts(t()) :: keyword()
   def transport_opts(%__MODULE__{} = o) do
     []
     |> maybe_put(:thread_id, o.thread_id)
