@@ -23,8 +23,7 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClient do
   def upload_file(channel_id, %{path: path} = file, opts)
       when is_binary(path) and path != "" do
     file_part =
-      {File.stream!(path, [], 2048),
-       multipart_file_options(file, Map.get(file, :filename) || Path.basename(path))}
+      {File.stream!(path, [], 2048), multipart_file_options(file, Map.get(file, :filename) || Path.basename(path))}
 
     post_multipart("/api/v4/files", [channel_id: channel_id, files: file_part], opts)
   end
@@ -103,6 +102,7 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClient do
 
       ReqClient.open_dm_channel(bot_user_id, target_user_id, opts)
   """
+  @impl true
   def open_dm_channel(bot_user_id, target_user_id, opts) do
     post("/api/v4/channels/direct", [bot_user_id, target_user_id], opts)
   end

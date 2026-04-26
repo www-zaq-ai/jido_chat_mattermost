@@ -25,6 +25,8 @@ defmodule Jido.Chat.Mattermost.Listener do
 
   alias Jido.Chat.Mattermost.WebSocket.Client
 
+  @doc "Returns a child spec for a bridge-scoped Mattermost WebSocket listener."
+  @spec child_spec(keyword()) :: Supervisor.child_spec()
   def child_spec(opts) do
     bridge_id = Keyword.fetch!(opts, :bridge_id)
 
@@ -36,6 +38,8 @@ defmodule Jido.Chat.Mattermost.Listener do
     }
   end
 
+  @doc "Starts the Mattermost WebSocket listener."
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     url = Keyword.fetch!(opts, :url)
     uri = build_ws_uri(url)
@@ -51,9 +55,7 @@ defmodule Jido.Chat.Mattermost.Listener do
       sink_opts: Keyword.get(opts, :sink_opts, [])
     }
 
-    Logger.info(
-      "[Mattermost Listener] Starting WebSocket connection bridge_id=#{state.bridge_id} uri=#{uri}"
-    )
+    Logger.info("[Mattermost Listener] Starting WebSocket connection bridge_id=#{state.bridge_id} uri=#{uri}")
 
     Fresh.start_link(uri, Client, state, [])
   end

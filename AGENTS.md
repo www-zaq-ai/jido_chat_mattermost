@@ -30,7 +30,7 @@ Read both docs before adding or changing adapter behaviour.
 
 ```sh
 mix quality   # shorthand: mix q
-# format --check-formatted  →  compile --warnings-as-errors  →  credo --strict  →  test
+# format --check-formatted  →  compile --warnings-as-errors  →  credo  →  dialyzer  →  doctor
 ```
 
 Run before every commit.

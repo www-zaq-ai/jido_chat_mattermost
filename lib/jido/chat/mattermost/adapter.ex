@@ -40,7 +40,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
     TypingOptions
   }
 
-  alias Jido.Chat.{FileUpload, Media, Mention, Response}
+  alias Jido.Chat.{ChannelInfo, FileUpload, Media, Mention, Response, Thread}
 
   # --- Adapter identity ---
 
@@ -50,6 +50,8 @@ defmodule Jido.Chat.Mattermost.Adapter do
   @impl true
   def capabilities do
     %{
+      initialize: :fallback,
+      shutdown: :fallback,
       send_message: :native,
       send_file: :native,
       post_message: :fallback,
@@ -67,10 +69,9 @@ defmodule Jido.Chat.Mattermost.Adapter do
       open_dm: :native,
       list_threads: :unsupported,
       open_modal: :unsupported,
+      open_thread: :native,
       webhook: :unsupported,
       verify_webhook: :unsupported,
-      initialize: :fallback,
-      shutdown: :fallback,
       post_channel_message: :fallback,
       stream: :fallback,
       parse_event: :unsupported,
@@ -221,7 +222,18 @@ defmodule Jido.Chat.Mattermost.Adapter do
   @impl true
   def fetch_metadata(channel_id, opts \\ []) do
     o = MetadataOptions.new(opts)
-    transport(o).fetch_channel(channel_id, MetadataOptions.transport_opts(o))
+
+    with {:ok, channel} <-
+           transport(o).fetch_channel(channel_id, MetadataOptions.transport_opts(o)) do
+      {:ok,
+       ChannelInfo.new(%{
+         id: stringify(channel["id"] || channel_id),
+         name: channel["display_name"] || channel["name"],
+         is_dm: channel["type"] == "D",
+         member_count: channel["member_count"],
+         metadata: channel
+       })}
+    end
   end
 
   # --- Thread / Message fetch ---
@@ -229,13 +241,45 @@ defmodule Jido.Chat.Mattermost.Adapter do
   @impl true
   def fetch_thread(root_id, opts \\ []) do
     o = FetchOptions.new(opts)
-    transport(o).fetch_thread(root_id, FetchOptions.transport_opts(o))
+
+    with {:ok, thread} <- transport(o).fetch_thread(root_id, FetchOptions.transport_opts(o)) do
+      {:ok,
+       Thread.new(%{
+         id: default_thread_id(nil, root_id),
+         adapter_name: :mattermost,
+         adapter: __MODULE__,
+         external_room_id: opts[:channel_id],
+         external_thread_id: root_id,
+         channel_id: opts[:channel_id],
+         metadata: thread
+       })}
+    end
   end
 
   @impl true
   def fetch_message(_channel_id, post_id, opts \\ []) do
     o = FetchOptions.new(opts)
     transport(o).fetch_post(post_id, FetchOptions.transport_opts(o))
+  end
+
+  @impl true
+  def open_thread(channel_id, post_id, opts \\ []) do
+    o = FetchOptions.new(opts)
+
+    with {:ok, post} <- transport(o).fetch_post(post_id, FetchOptions.transport_opts(o)) do
+      external_thread_id = nilify(post["root_id"]) || stringify(post["id"]) || stringify(post_id)
+
+      {:ok,
+       Thread.new(%{
+         id: default_thread_id(channel_id, external_thread_id),
+         adapter_name: :mattermost,
+         adapter: __MODULE__,
+         external_room_id: channel_id,
+         external_thread_id: external_thread_id,
+         channel_id: channel_id,
+         metadata: %{root_post: post}
+       })}
+    end
   end
 
   # --- Reactions ---
@@ -293,6 +337,23 @@ defmodule Jido.Chat.Mattermost.Adapter do
     transport(o).open_dm_channel(bot_user_id, target_user_id, FetchOptions.transport_opts(o))
   end
 
+  @impl true
+  def open_dm(target_user_id, opts \\ []) do
+    bot_user_id =
+      Keyword.get(opts, :bot_user_id) || Application.get_env(:jido_chat_mattermost, :bot_user_id)
+
+    with bot_user_id when is_binary(bot_user_id) and bot_user_id != "" <- bot_user_id,
+         {:ok, channel} <- open_dm_channel(bot_user_id, target_user_id, opts),
+         channel_id when is_binary(channel_id) and channel_id != "" <- channel["id"] do
+      {:ok, channel_id}
+    else
+      nil -> {:error, :bot_user_id_required}
+      "" -> {:error, :bot_user_id_required}
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_dm_channel}
+    end
+  end
+
   # --- Listener / ingress ---
 
   @impl true
@@ -305,6 +366,11 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   defp transport(%{transport: mod}) when not is_nil(mod), do: mod
   defp transport(_), do: ReqClient
+
+  defp default_thread_id(nil, external_thread_id), do: "mattermost:thread:#{external_thread_id}"
+
+  defp default_thread_id(channel_id, external_thread_id),
+    do: "mattermost:#{channel_id}:#{external_thread_id}"
 
   defp extract_media(%{"files" => files}) when is_list(files) do
     files
@@ -459,6 +525,10 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   defp nilify(v) when v in [nil, ""], do: nil
   defp nilify(v), do: v
+
+  defp stringify(nil), do: nil
+  defp stringify(v) when is_binary(v), do: v
+  defp stringify(v), do: to_string(v)
 
   defp mattermost_channel_type("D"), do: :dm
   defp mattermost_channel_type("P"), do: :private

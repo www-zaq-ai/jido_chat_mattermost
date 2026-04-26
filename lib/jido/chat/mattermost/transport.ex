@@ -51,4 +51,11 @@ defmodule Jido.Chat.Mattermost.Transport do
 
   @callback get_user(user_id :: String.t(), opts :: keyword()) ::
               {:ok, map()} | {:error, term()}
+
+  @callback open_dm_channel(
+              bot_user_id :: String.t(),
+              target_user_id :: String.t(),
+              opts :: keyword()
+            ) ::
+              {:ok, map()} | {:error, term()}
 end
