@@ -438,7 +438,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
   defp upload_input(_upload), do: {:error, :missing_file_source}
 
   defp upload_caption(%FileUpload{} = upload, opts) do
-    metadata = upload.metadata || %{}
+    metadata = upload.metadata
 
     [
       opts[:caption],

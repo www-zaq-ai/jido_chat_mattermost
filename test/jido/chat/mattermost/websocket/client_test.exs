@@ -9,9 +9,17 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
     bot_name: "zaq",
     channel_ids: :all,
     bridge_id: "mattermost_1",
-    oban_worker: nil,
-    config_id: 42
+    sink_mfa: {__MODULE__, :sink_noop, []},
+    sink_opts: []
   }
+
+  def sink_noop(_payload, _opts), do: :ok
+
+  defp raising_sink_state do
+    Map.put(@base_state, :sink_mfa, {__MODULE__, :sink_raise, []})
+  end
+
+  def sink_raise(_payload, _opts), do: raise("sink called")
 
   defp posted_frame(post_attrs) do
     post =
@@ -112,13 +120,8 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
     end
 
     test "passes through messages from a different user" do
-      # Uses a stub worker that raises to confirm it IS called (and we handle the error)
-      state_with_bad_worker = Map.put(@base_state, :oban_worker, NonExistentWorker)
-
       frame = posted_frame(%{"user_id" => "other-user"})
-
-      # Should not raise — Oban.insert error is caught and logged
-      assert {:ok, _state} = Client.handle_in(frame, state_with_bad_worker)
+      assert {:ok, _state} = Client.handle_in(frame, raising_sink_state())
     end
   end
 
@@ -126,27 +129,19 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
 
   describe "handle_in/2 channel filtering" do
     test "passes through when channel_ids is :all" do
-      state_with_bad_worker = Map.put(@base_state, :oban_worker, NonExistentWorker)
       frame = posted_frame(%{"channel_id" => "any-channel"})
-      # :all → proceeds to enqueue (error caught)
-      assert {:ok, _state} = Client.handle_in(frame, state_with_bad_worker)
+      assert {:ok, _state} = Client.handle_in(frame, raising_sink_state())
     end
 
-    test "filters out messages from untracked channels, oban_worker never invoked" do
-      state = Map.merge(@base_state, %{channel_ids: ["tracked-chan"], oban_worker: nil})
+    test "filters out messages from untracked channels, sink never invoked" do
+      state = Map.put(@base_state, :channel_ids, ["tracked-chan"])
       frame = posted_frame(%{"channel_id" => "other-chan"})
       assert {:ok, _state} = Client.handle_in(frame, state)
     end
 
     test "passes through messages from tracked channels" do
-      state =
-        Map.merge(@base_state, %{
-          channel_ids: ["tracked-chan"],
-          oban_worker: NonExistentWorker
-        })
-
+      state = Map.put(raising_sink_state(), :channel_ids, ["tracked-chan"])
       frame = posted_frame(%{"channel_id" => "tracked-chan"})
-      # Proceeds to enqueue (error caught)
       assert {:ok, _state} = Client.handle_in(frame, state)
     end
   end
