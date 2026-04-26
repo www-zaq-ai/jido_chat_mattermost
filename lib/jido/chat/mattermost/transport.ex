@@ -9,6 +9,9 @@ defmodule Jido.Chat.Mattermost.Transport do
   @callback send_message(channel_id :: String.t(), text :: String.t(), opts :: keyword()) ::
               {:ok, map()} | {:error, term()}
 
+  @callback upload_file(channel_id :: String.t(), file :: map(), opts :: keyword()) ::
+              {:ok, map()} | {:error, term()}
+
   @callback edit_message(
               channel_id :: String.t(),
               post_id :: String.t(),
