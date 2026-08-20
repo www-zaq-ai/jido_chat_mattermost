@@ -40,6 +40,34 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   alias Jido.Chat.{ChannelInfo, FileUpload, Media, Mention, Response, Thread}
 
+  @media_type_pattern ~r/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/
+  @media_kind_extensions %{
+    ".aac" => :audio,
+    ".avi" => :video,
+    ".avif" => :image,
+    ".bmp" => :image,
+    ".flac" => :audio,
+    ".gif" => :image,
+    ".heic" => :image,
+    ".heif" => :image,
+    ".jpeg" => :image,
+    ".jpg" => :image,
+    ".m4a" => :audio,
+    ".m4v" => :video,
+    ".mkv" => :video,
+    ".mov" => :video,
+    ".mp3" => :audio,
+    ".mp4" => :video,
+    ".ogg" => :audio,
+    ".png" => :image,
+    ".svg" => :image,
+    ".tif" => :image,
+    ".tiff" => :image,
+    ".wav" => :audio,
+    ".webm" => :video,
+    ".webp" => :image
+  }
+
   # --- Adapter identity ---
 
   @impl true
@@ -404,19 +432,26 @@ defmodule Jido.Chat.Mattermost.Adapter do
   defp normalize_file_media(file) when is_map(file) do
     file_id = map_get(file, ["id", :id])
 
+    url =
+      get_non_blank(file, ["link", :link, "permalink", :permalink]) ||
+        media_reference_url(file_id)
+
+    filename = get_non_blank(file, ["name", :name])
+    extension = get_non_blank(file, ["extension", :extension])
+    media_type = file |> map_get(["mime_type", :mime_type]) |> normalize_media_type()
+
     Media.new(%{
-      url:
-        map_get(file, ["link", :link, "permalink", :permalink]) ||
-          media_reference_url(file_id),
-      filename: map_get(file, ["name", :name]),
-      media_type: map_get(file, ["mime_type", :mime_type]),
+      kind: mattermost_media_kind(media_type, filename, extension, url),
+      url: url,
+      filename: filename,
+      media_type: media_type,
       size_bytes: map_get(file, ["size", :size]),
       width: map_get(file, ["width", :width]),
       height: map_get(file, ["height", :height]),
       metadata:
         %{
-          file_id: map_get(file, ["id", :id]),
-          extension: map_get(file, ["extension", :extension])
+          file_id: file_id,
+          extension: extension
         }
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
         |> Map.new()
@@ -424,6 +459,74 @@ defmodule Jido.Chat.Mattermost.Adapter do
   end
 
   defp normalize_file_media(_), do: nil
+
+  defp mattermost_media_kind(media_type, filename, extension, url) do
+    media_kind_from_type(media_type) ||
+      media_kind_from_reference(filename) ||
+      media_kind_from_extension(extension) ||
+      media_kind_from_reference(url) ||
+      :file
+  end
+
+  defp media_kind_from_type(media_type) when is_binary(media_type) do
+    case canonical_media_type(media_type) do
+      "image/" <> _rest -> :image
+      "audio/" <> _rest -> :audio
+      "video/" <> _rest -> :video
+      _other -> :file
+    end
+  end
+
+  defp media_kind_from_type(_media_type), do: nil
+
+  defp media_kind_from_extension(extension) when is_binary(extension) do
+    extension
+    |> String.trim()
+    |> String.trim_leading(".")
+    |> then(&Map.get(@media_kind_extensions, "." <> String.downcase(&1)))
+  end
+
+  defp media_kind_from_extension(_extension), do: nil
+
+  defp media_kind_from_reference(reference) when is_binary(reference) do
+    reference
+    |> URI.parse()
+    |> Map.get(:path)
+    |> case do
+      path when is_binary(path) -> path |> Path.extname() |> String.downcase()
+      _other -> ""
+    end
+    |> then(&Map.get(@media_kind_extensions, &1))
+  end
+
+  defp media_kind_from_reference(_reference), do: nil
+
+  defp normalize_media_type(value) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    if Regex.match?(@media_type_pattern, canonical_media_type(trimmed)),
+      do: trimmed,
+      else: nil
+  end
+
+  defp normalize_media_type(_value), do: nil
+
+  defp canonical_media_type(value) do
+    value
+    |> String.split(";", parts: 2)
+    |> hd()
+    |> String.trim()
+    |> String.downcase()
+  end
+
+  defp get_non_blank(map, keys) do
+    Enum.find_value(keys, fn key ->
+      case Map.get(map, key) do
+        value when is_binary(value) -> if(String.trim(value) == "", do: nil, else: value)
+        _other -> nil
+      end
+    end)
+  end
 
   defp media_file_id(%Media{url: url, metadata: metadata}) do
     metadata

@@ -296,6 +296,33 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
                 "name" => "photo.png",
                 "mime_type" => "image/png",
                 "link" => "https://mm.example.com/file/1"
+              },
+              %{
+                "name" => "fallback.png",
+                "mime_type" => nil,
+                "link" => "https://mm.example.com/file/2"
+              },
+              %{
+                "name" => "extensionless",
+                "extension" => " .PNG ",
+                "mime_type" => " ",
+                "link" => "https://mm.example.com/file/3"
+              },
+              %{
+                "name" => "archive.unknown",
+                "mime_type" => nil,
+                "link" => "https://mm.example.com/file/4"
+              },
+              %{
+                "name" => " ",
+                "mime_type" => nil,
+                "link" => " ",
+                "permalink" => "https://mm.example.com/files/photo.PNG?token=signed"
+              },
+              %{
+                "name" => "misleading.png",
+                "mime_type" => " application/pdf; charset=binary ",
+                "link" => "https://mm.example.com/file/6"
               }
             ]
           }
@@ -304,10 +331,30 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
       }
 
       assert {:ok, incoming} = MattermostAdapter.transform_incoming(payload)
-      assert [media] = incoming.media
-      assert media.filename == "photo.png"
-      assert media.media_type == "image/png"
-      assert media.url == "https://mm.example.com/file/1"
+
+      assert [explicit, filename_fallback, extension_fallback, unknown, signed_url, misleading] =
+               incoming.media
+
+      assert explicit.filename == "photo.png"
+      assert explicit.media_type == "image/png"
+      assert explicit.url == "https://mm.example.com/file/1"
+
+      assert filename_fallback.kind == :image
+      assert filename_fallback.media_type == nil
+
+      assert extension_fallback.kind == :image
+      assert extension_fallback.media_type == nil
+      assert extension_fallback.metadata.extension == " .PNG "
+
+      assert unknown.kind == :file
+      assert unknown.media_type == nil
+
+      assert signed_url.kind == :image
+      assert signed_url.url == "https://mm.example.com/files/photo.PNG?token=signed"
+      assert signed_url.filename == nil
+
+      assert misleading.kind == :file
+      assert misleading.media_type == "application/pdf; charset=binary"
     end
 
     test "message files without links receive adapter-owned references" do
