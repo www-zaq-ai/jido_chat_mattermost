@@ -96,9 +96,14 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      code-quality: write
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
@@ -124,18 +129,29 @@ jobs:
         run: mix deps.get
 
       - name: Run coverage
-        run: mix coveralls.json
+        run: mix coveralls.cobertura
 
       - name: Save coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage
-          path: cover/excoveralls.json
+          path: cover/cobertura.xml
           if-no-files-found: ignore
 
-      - name: Upload coverage
+      - name: Upload coverage to GitHub
+        if: >-
+          !cancelled() && hashFiles('cover/cobertura.xml') != '' &&
+          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: actions/upload-code-coverage@v1
+        with:
+          file: cover/cobertura.xml
+          language: Elixir
+          label: code-coverage/excoveralls
+
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() && hashFiles('cover/cobertura.xml') != '' }}
         uses: codecov/codecov-action@v5
         with:
-          files: ./cover/excoveralls.json
+          files: ./cover/cobertura.xml
           token: ${{ secrets.CODECOV_TOKEN }}
