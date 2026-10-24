@@ -59,39 +59,6 @@ jobs:
       - name: Check quality
         run: mix quality
 
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          otp-version: "27.3"
-          elixir-version: "1.18.4"
-
-      - name: Restore dependencies and build
-        uses: actions/cache@v5
-        with:
-          path: |
-            deps
-            _build/test
-          key: ${{ runner.os }}-test-otp27.3-elixir1.18.4-${{ hashFiles('mix.lock') }}
-
-      - name: Install Hex/Rebar
-        run: |
-          mix local.hex --force
-          mix local.rebar --force
-
-      - name: Install dependencies
-        run: mix deps.get
-
-      - name: Run tests
-        run: mix test
-
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -115,7 +82,8 @@ jobs:
           MM_SQLSETTINGS_DRIVERNAME: postgres
           MM_SQLSETTINGS_DATASOURCE: postgres://mattermost@postgres:5432/mattermost?sslmode=disable&connect_timeout=10
           MM_SERVICESETTINGS_SITEURL: http://localhost:8065
-          MM_SERVICESETTINGS_ENABLELOCALMODE: "false"
+          # Required by the image's built-in mmctl --local healthcheck.
+          MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
           MM_TEAMSETTINGS_ENABLEUSERCREATION: "true"
           MM_EMAILSETTINGS_REQUIREEMAILVERIFICATION: "false"
           MM_LOGSETTINGS_CONSOLELEVEL: ERROR
