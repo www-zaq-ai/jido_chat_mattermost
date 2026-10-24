@@ -20,6 +20,7 @@ defmodule Jido.Chat.Mattermost.Listener do
     * `:bot_name` - used for mention detection
     * `:channel_ids` - allowlist of channel IDs, or `:all` (default)
     * `:transport` - injectable REST transport for reaction channel classification
+    * `:websocket_starter` - module implementing `start_link/4` (default `Fresh`)
 
   Reactions without channel type metadata in otherwise-unlisted channels require
   a synchronous metadata request using this listener's URL and token. Only verified
@@ -65,7 +66,8 @@ defmodule Jido.Chat.Mattermost.Listener do
 
     Logger.info("[Mattermost Listener] Starting WebSocket connection bridge_id=#{state.bridge_id} uri=#{uri}")
 
-    Fresh.start_link(uri, Client, state, [])
+    starter = Keyword.get(opts, :websocket_starter, Fresh)
+    starter.start_link(uri, Client, state, [])
   end
 
   defp build_ws_uri(url) do
