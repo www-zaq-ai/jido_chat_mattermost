@@ -3,6 +3,29 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
 
   alias Jido.Chat.Mattermost.WebSocket.Client
 
+  defmodule ChannelTransport do
+    def fetch_channel(channel_id, opts) do
+      send(self(), {:fetch_channel, channel_id, opts})
+
+      case Process.get(:channel_result) do
+        :raise -> raise "transport failure"
+        result -> result
+      end
+    end
+  end
+
+  defp classified_state(result) do
+    Process.put(:channel_result, result)
+
+    capturing_sink_state()
+    |> Map.put(:channel_ids, ["tracked-chan"])
+    |> Map.put(:metadata_opts,
+      transport: ChannelTransport,
+      url: "https://mattermost.example.com",
+      token: "test-token"
+    )
+  end
+
   @base_state %{
     token: "test-token",
     bot_user_id: "bot-uid",
@@ -14,6 +37,10 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
   }
 
   def sink_noop(_payload, _opts), do: :ok
+
+  test "capability matrix is coherent" do
+    assert :ok = Jido.Chat.Adapter.validate_capabilities(Jido.Chat.Mattermost.Adapter)
+  end
 
   defp raising_sink_state do
     Map.put(@base_state, :sink_mfa, {__MODULE__, :sink_raise, []})
@@ -47,8 +74,7 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
         %{
           "event" => event_name,
           "data" => %{
-            "reaction" => Jason.encode!(reaction),
-            "channel_type" => "D"
+            "reaction" => Jason.encode!(reaction)
           },
           "broadcast" => %{"channel_id" => "chan-abc"}
         },
@@ -294,7 +320,7 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
     end
 
     test "always tracks reactions in DM channels" do
-      state = Map.put(capturing_sink_state(), :channel_ids, ["tracked-chan"])
+      state = classified_state({:ok, %{"id" => "chan-abc", "type" => "D"}})
       frame = reaction_frame("reaction_added")
 
       assert {:ok, _state} = Client.handle_in(frame, state)
@@ -311,8 +337,7 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
 
       assert {:ok, _state} = Client.handle_in({:text, Jason.encode!(event)}, capturing_sink_state())
 
-      assert_received {:sink_called, envelope, _opts}
-      assert envelope.payload.emoji == nil
+      refute_received {:sink_called, _envelope, _opts}
     end
 
     test "does not crash when the reaction payload is missing" do
@@ -326,6 +351,128 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
       frame = reaction_frame("reaction_added", %{}, %{"broadcast" => %{}})
 
       assert {:ok, _state} = Client.handle_in(frame, capturing_sink_state())
+      refute_received {:sink_called, _envelope, _opts}
+    end
+  end
+
+  describe "reaction classification without channel_type" do
+    for type <- ["D", "G"],
+        post_id <- ["root-post", "reply-post"],
+        event <- ["reaction_added", "reaction_removed"] do
+      test "#{type} #{post_id} #{event} is delivered first after connect and reconnect" do
+        state = classified_state({:ok, %{"id" => "chan-abc", "type" => unquote(type)}})
+        frame = reaction_frame(unquote(event), %{"post_id" => unquote(post_id)})
+        {:reply, _, state} = Client.handle_connect(101, [], state)
+
+        for connection <- [:initial, :reconnected] do
+          state =
+            if connection == :reconnected do
+              {:reconnect, state} = Client.handle_disconnect(1001, "closed", state)
+              {:reply, _, state} = Client.handle_connect(101, [], state)
+              state
+            else
+              state
+            end
+
+          assert {:ok, %{auth_status: :ok}} = Client.handle_in(frame, state)
+          assert_received {:fetch_channel, "chan-abc", opts}
+          assert opts[:url] == "https://mattermost.example.com"
+          assert opts[:token] == "test-token"
+          assert_received {:sink_called, envelope, sink_opts}
+          assert envelope.message_id == unquote(post_id)
+          assert envelope.channel_id == "chan-abc"
+          assert envelope.payload.added == (unquote(event) == "reaction_added")
+          assert sink_opts[:transport] == "websocket"
+        end
+      end
+    end
+
+    test "unlisted shared channels, unknown metadata and failures are rejected" do
+      for result <- [
+            {:ok, %{"id" => "chan-abc", "type" => "O"}},
+            {:ok, %{"id" => "chan-abc", "type" => "P"}},
+            {:ok, %{"id" => "chan-abc", "type" => "unknown"}},
+            {:ok, %{}},
+            {:ok, nil},
+            {:ok, []},
+            {:ok, %{"id" => "wrong-channel", "type" => "D"}},
+            {:error, :timeout},
+            :raise
+          ] do
+        assert {:ok, _} = Client.handle_in(reaction_frame("reaction_added"), classified_state(result))
+        assert_received {:fetch_channel, "chan-abc", _}
+        refute_received {:sink_called, _, _}
+      end
+    end
+
+    test "failed lookup does not prevent a later successful lookup" do
+      state = classified_state({:error, :timeout})
+      frame = reaction_frame("reaction_added")
+      assert {:ok, state} = Client.handle_in(frame, state)
+      refute_received {:sink_called, _, _}
+
+      state =
+        Map.put(state, :metadata_opts, classified_state({:ok, %{"id" => "chan-abc", "type" => "D"}}).metadata_opts)
+
+      assert {:ok, _} = Client.handle_in(frame, state)
+      assert_received {:sink_called, _, _}
+    end
+
+    test "allowlisted shared roots and replies need no metadata lookup" do
+      for post_id <- ["root-post", "reply-post"], event <- ["reaction_added", "reaction_removed"] do
+        state = Map.put(classified_state({:error, :unexpected}), :channel_ids, ["chan-abc"])
+        assert {:ok, _} = Client.handle_in(reaction_frame(event, %{"post_id" => post_id}), state)
+        assert_received {:sink_called, envelope, _}
+        assert envelope.message_id == post_id
+        assert envelope.payload.added == (event == "reaction_added")
+        refute_received {:fetch_channel, _, _}
+      end
+    end
+
+    test "bot reactions and malformed reaction fields do not trigger lookups" do
+      for attrs <- [%{"user_id" => "bot-uid"}, %{"user_id" => nil}, %{"post_id" => ""}, %{"emoji_name" => 7}] do
+        assert {:ok, _} =
+                 Client.handle_in(reaction_frame("reaction_added", attrs), classified_state({:error, :unexpected}))
+
+        refute_received {:fetch_channel, _, _}
+        refute_received {:sink_called, _, _}
+      end
+    end
+
+    test "explicit direct classifications preserve existing behavior without lookups" do
+      for type <- ["D", "G"] do
+        frame = reaction_frame("reaction_added")
+        {:text, json} = frame
+        event = Jason.decode!(json)
+        event = put_in(event, ["data", "channel_type"], type)
+        assert {:ok, _} = Client.handle_in({:text, Jason.encode!(event)}, classified_state(:raise))
+        assert_received {:sink_called, _, _}
+        refute_received {:fetch_channel, _, _}
+      end
+    end
+
+    test "invalid channel IDs and unknown explicit types never grant eligibility" do
+      for channel_id <- [nil, "", 123] do
+        frame = reaction_frame("reaction_added", %{}, %{"broadcast" => %{"channel_id" => channel_id}})
+        assert {:ok, _} = Client.handle_in(frame, classified_state(:raise))
+        refute_received {:fetch_channel, _, _}
+        refute_received {:sink_called, _, _}
+      end
+
+      {:text, json} = reaction_frame("reaction_added")
+      event = put_in(Jason.decode!(json), ["data", "channel_type"], "unknown")
+      assert {:ok, _} = Client.handle_in({:text, Jason.encode!(event)}, classified_state(:raise))
+      refute_received {:fetch_channel, _, _}
+      refute_received {:sink_called, _, _}
+    end
+
+    test "valid map-encoded reactions still reach the sink" do
+      {:text, json} = reaction_frame("reaction_added")
+      event = Jason.decode!(json)
+      event = update_in(event, ["data", "reaction"], &Jason.decode!/1)
+      assert {:ok, _} = Client.handle_in({:text, Jason.encode!(event)}, capturing_sink_state())
+      assert_received {:sink_called, envelope, _}
+      assert envelope.payload.emoji == "thumbsup"
     end
   end
 

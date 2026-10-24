@@ -19,6 +19,13 @@ defmodule Jido.Chat.Mattermost.Listener do
     * `:bot_user_id` - filters out messages from the bot itself
     * `:bot_name` - used for mention detection
     * `:channel_ids` - allowlist of channel IDs, or `:all` (default)
+    * `:transport` - injectable REST transport for reaction channel classification
+
+  Reactions without channel type metadata in otherwise-unlisted channels require
+  a synchronous metadata request using this listener's URL and token. Only verified
+  direct/group-direct channels bypass the allowlist. Results are not cached, so
+  reconnects need no warm-up; failed lookups drop the current event and later
+  reactions retry. Posted events and the sink payload contract are unchanged.
   """
 
   require Logger
@@ -50,6 +57,7 @@ defmodule Jido.Chat.Mattermost.Listener do
       bot_user_id: Keyword.get(opts, :bot_user_id),
       bot_name: Keyword.get(opts, :bot_name),
       channel_ids: Keyword.get(opts, :channel_ids, :all),
+      metadata_opts: Keyword.take(opts, [:url, :token, :transport]),
       bridge_id: Keyword.fetch!(opts, :bridge_id),
       sink_mfa: Keyword.fetch!(opts, :sink_mfa),
       sink_opts: Keyword.get(opts, :sink_opts, [])
