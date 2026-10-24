@@ -87,7 +87,8 @@ defmodule Jido.Chat.Mattermost.MixProject do
 
   defp package do
     [
-      files: ["lib", "mix.exs", "README.md", "usage-rules.md"],
+      licenses: ["Apache-2.0"],
+      files: ["lib", "mix.exs", "README.md", "usage-rules.md", "LICENSE"],
       links: %{
         "Discord" => "https://jido.run/discord",
         "Documentation" => "https://hexdocs.pm/jido_chat_mattermost",
