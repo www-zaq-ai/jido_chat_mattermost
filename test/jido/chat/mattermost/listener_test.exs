@@ -50,6 +50,16 @@ defmodule Jido.Chat.Mattermost.ListenerTest do
       spec = Listener.child_spec(@base_opts)
       assert {Listener, :start_link, [_opts]} = spec.start
     end
+
+    test "preserves per-instance metadata transport and credentials in start options" do
+      for {bridge_id, url, token} <- [
+            {"instance-a", "https://a.example.com", "token-a"},
+            {"instance-b", "https://b.example.com", "token-b"}
+          ] do
+        opts = [bridge_id: bridge_id, url: url, token: token, transport: FakeTransport]
+        assert %{start: {Listener, :start_link, [^opts]}} = Listener.child_spec(opts)
+      end
+    end
   end
 
   # ── URI building (via child_spec start args) ──────────────────────────

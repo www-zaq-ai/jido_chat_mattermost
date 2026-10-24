@@ -5,27 +5,97 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  MIX_ENV: test
 
 jobs:
-  lint:
-    name: Lint
-    uses: agentjido/github-actions/.github/workflows/elixir-lint.yml@v3
-    with:
-      otp_version: "27.3"
-      elixir_version: "1.18.4"
-      validate_hex_package: false
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.3"
+          elixir-version: "1.18.4"
+
+      - name: Restore dependencies and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build/test
+          key: ${{ runner.os }}-quality-otp27.3-elixir1.18.4-${{ hashFiles('mix.lock') }}
+
+      - name: Restore Dialyzer PLTs
+        uses: actions/cache@v5
+        with:
+          path: priv/plts
+          key: ${{ runner.os }}-plt-otp27.3-elixir1.18.4-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-plt-otp27.3-elixir1.18.4-
+
+      - name: Install Hex/Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Check quality
+        run: mix quality
 
   test:
     name: Test
-    uses: agentjido/github-actions/.github/workflows/elixir-test.yml@v3
-    with:
-      otp_versions: '["27.3"]'
-      elixir_versions: '["1.18.4"]'
-      test_command: mix test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.3"
+          elixir-version: "1.18.4"
+
+      - name: Restore dependencies and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build/test
+          key: ${{ runner.os }}-test-otp27.3-elixir1.18.4-${{ hashFiles('mix.lock') }}
+
+      - name: Install Hex/Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Run tests
+        run: mix test
 
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -42,9 +112,7 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-coverage-${{ hashFiles('mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-coverage-
+          key: ${{ runner.os }}-coverage-otp27.3-elixir1.18.4-${{ hashFiles('mix.lock') }}
 
       - name: Install Hex/Rebar
         run: |
@@ -56,9 +124,18 @@ jobs:
         run: mix deps.get
 
       - name: Run coverage
-        run: mix coveralls
+        run: mix coveralls.json
+
+      - name: Save coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: cover/excoveralls.json
+          if-no-files-found: ignore
 
       - name: Upload coverage
         uses: codecov/codecov-action@v5
         with:
           files: ./cover/excoveralls.json
+          token: ${{ secrets.CODECOV_TOKEN }}

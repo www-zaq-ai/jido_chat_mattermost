@@ -25,6 +25,7 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
   use Fresh
 
   alias Jido.Chat.EventEnvelope
+  alias Jido.Chat.Mattermost.Adapter
 
   require Logger
 
@@ -221,9 +222,10 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
     channel_id = broadcast_channel_id(event)
 
     with {:ok, reaction} <- decode_reaction(data),
+         true <- valid_reaction?(reaction, channel_id),
          post <- reaction_as_post(reaction, channel_id),
          true <- not_bot?(post, state),
-         true <- in_tracked_channel?(post, Map.get(data, "channel_type"), state) do
+         true <- tracked_reaction_channel?(channel_id, Map.get(data, "channel_type"), state) do
       emit_reaction_event(event, reaction, channel_id, added, state)
     else
       _ -> :ignored
@@ -241,6 +243,44 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
   defp decode_reaction(%{"reaction" => reaction}) when is_map(reaction), do: {:ok, reaction}
 
   defp decode_reaction(_), do: {:error, :missing_reaction}
+
+  defp valid_reaction?(reaction, channel_id) do
+    Enum.all?(
+      [channel_id, reaction["post_id"], reaction["user_id"], reaction["emoji_name"]],
+      &(is_binary(&1) and byte_size(&1) > 0)
+    )
+  end
+
+  defp tracked_reaction_channel?(_channel_id, _channel_type, %{channel_ids: :all}),
+    do: true
+
+  defp tracked_reaction_channel?(channel_id, channel_type, %{channel_ids: ids} = state)
+       when is_list(ids) do
+    channel_id in ids or direct_reaction_channel?(channel_id, channel_type, state)
+  end
+
+  defp tracked_reaction_channel?(_channel_id, _channel_type, _state), do: false
+
+  defp direct_reaction_channel?(_channel_id, type, _state) when type in ["D", "G"],
+    do: true
+
+  defp direct_reaction_channel?(channel_id, nil, state) do
+    # Reaction broadcasts omit channel_type. Resolve it even when this is the
+    # first event after startup/reconnect; no preceding post or cache is needed.
+    case Adapter.fetch_metadata(channel_id, Map.get(state, :metadata_opts, [])) do
+      {:ok, %{metadata: %{"id" => ^channel_id, "type" => type}}} when type in ["D", "G"] ->
+        true
+
+      _ ->
+        false
+    end
+  rescue
+    # Malformed metadata and transport exceptions must not grant eligibility or
+    # expose credentials through the outer frame handler's exception logging.
+    _ -> false
+  end
+
+  defp direct_reaction_channel?(_channel_id, _type, _state), do: false
 
   # Lets reactions reuse the bot and tracked-channel filters built for posts.
   defp reaction_as_post(reaction, channel_id) do
