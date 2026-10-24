@@ -3,6 +3,7 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
 
   alias Jido.Chat.{Adapter, ChannelInfo, FileUpload, Media, Mention, PostPayload, Response, Thread}
   alias Jido.Chat.Mattermost.Adapter, as: MattermostAdapter
+  alias Jido.Chat.Mattermost.Test.RecordingTransport
 
   # ---------------------------------------------------------------------------
   # Fake transport — canned responses for all callbacks
@@ -122,6 +123,195 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
   end
 
   defp fake_opts, do: [transport: FakeTransport]
+
+  describe "retained media validation and upload cases" do
+    test "invalid media references fail before contacting the transport" do
+      for reference <- [nil, 42, [], "ftp://example.com/file", "https://example.com"] do
+        assert {:error, :invalid_media_reference} =
+                 MattermostAdapter.fetch_media(reference, transport: RecordingTransport)
+
+        refute_received {:transport_call, _, _}
+      end
+    end
+
+    test "URL-only media maps and structs fall back to the Mattermost file URL" do
+      url = "https://chat.example.com/api/v4/files/file_123"
+      Process.put({RecordingTransport, :download_file}, {:ok, "bytes"})
+
+      for reference <- [%{url: url}, %{"url" => url}, Media.new(%{url: url})] do
+        assert {:ok, "bytes"} =
+                 MattermostAdapter.fetch_media(reference, transport: RecordingTransport)
+
+        assert_receive {:transport_call, :download_file, ["file_123", _]}
+      end
+    end
+
+    test "incoming media ignores malformed entries but retains valid attachments" do
+      payload = %{
+        "post" => %{
+          "id" => "p1",
+          "channel_id" => "c1",
+          "user_id" => "u1",
+          "message" => "files",
+          "metadata" => %{"files" => [nil, 42, "invalid", %{"id" => "file_123", "name" => "valid.txt"}]}
+        }
+      }
+
+      assert {:ok, incoming} = MattermostAdapter.transform_incoming(payload)
+      assert [%Media{filename: "valid.txt", url: "mattermost://file/file_123"}] = incoming.media
+    end
+
+    test "file metadata without identity does not fabricate a download URL" do
+      payload = %{
+        "post" => %{
+          "id" => "p1",
+          "channel_id" => "c1",
+          "user_id" => "u1",
+          "message" => "files",
+          "metadata" => %{"files" => [%{"name" => "unknown.txt"}]}
+        }
+      }
+
+      assert {:ok, incoming} = MattermostAdapter.transform_incoming(payload)
+      assert [%Media{url: nil, filename: "unknown.txt"}] = incoming.media
+    end
+
+    test "empty or malformed upload results prevent a post from being sent" do
+      upload = FileUpload.new(%{kind: :file, data: "bytes", filename: "file.bin"})
+
+      for result <- [%{}, %{"file_infos" => []}, %{"file_infos" => "invalid"}] do
+        Process.put({RecordingTransport, :upload_file}, {:ok, result})
+
+        assert {:error, :missing_uploaded_file_id} =
+                 MattermostAdapter.send_file("c1", upload, transport: RecordingTransport)
+
+        assert_receive {:transport_call, :upload_file, ["c1", _, _]}
+        refute_received {:transport_call, :send_message, _}
+      end
+    end
+
+    test "uploaded image, audio, and video MIME types determine delivered kind" do
+      for {mime, expected} <- [{"image/png", :image}, {"audio/ogg", :audio}, {"video/mp4", :video}] do
+        upload = FileUpload.new(%{kind: :file, data: "bytes", filename: "attachment.bin"})
+        file = %{"id" => "f1", "mime_type" => mime}
+        Process.put({RecordingTransport, :upload_file}, {:ok, %{"file_infos" => [file]}})
+        Process.put({RecordingTransport, :send_message}, {:ok, %{"id" => "p1"}})
+
+        assert {:ok, response} =
+                 MattermostAdapter.send_file("c1", upload, transport: RecordingTransport)
+
+        assert response.metadata.delivered_kind == expected
+        assert response.metadata.upload_kind == :file
+        assert response.metadata.content_type == mime
+      end
+    end
+  end
+
+  describe "additional adapter contracts" do
+    setup do
+      {:ok,
+       opts: [
+         transport: RecordingTransport,
+         url: "https://chat.example.com",
+         token: "test-token"
+       ]}
+    end
+
+    test "capability matrix is coherent" do
+      assert :ok = Adapter.validate_capabilities(MattermostAdapter)
+      assert MattermostAdapter.channel_type() == :mattermost
+    end
+
+    test "editing forwards credentials and normalizes the response", %{opts: opts} do
+      post = %{"id" => "p1", "message" => "updated"}
+      Process.put({RecordingTransport, :edit_message}, {:ok, post})
+
+      assert {:ok, %Response{} = response} =
+               MattermostAdapter.edit_message("c1", "p1", "updated", opts)
+
+      assert response.status == :edited
+      assert response.external_message_id == "p1"
+      assert response.external_room_id == "c1"
+      assert response.raw == post
+      assert_receive {:transport_call, :edit_message, ["c1", "p1", "updated", forwarded]}
+      assert Map.new(forwarded) == Map.new(Keyword.delete(opts, :transport))
+    end
+
+    test "editing preserves transport errors", %{opts: opts} do
+      Process.put({RecordingTransport, :edit_message}, {:error, :forbidden})
+      assert {:error, :forbidden} = MattermostAdapter.edit_message("c1", "p1", "text", opts)
+    end
+
+    test "delete and typing forward identifiers, credentials, and results", %{opts: opts} do
+      for {callback, args, transport_callback, result} <- [
+            {:delete_message, ["c1", "p1"], :delete_message, {:ok, %{"id" => "p1"}}},
+            {:start_typing, ["c1"], :send_typing, :ok}
+          ],
+          expected <- [result, {:error, :forbidden}] do
+        Process.put({RecordingTransport, transport_callback}, expected)
+        assert apply(MattermostAdapter, callback, args ++ [opts]) == expected
+        assert_receive {:transport_call, ^transport_callback, forwarded}
+        assert Enum.drop(forwarded, -1) == args
+        assert Map.new(List.last(forwarded)) == Map.new(Keyword.delete(opts, :transport))
+      end
+    end
+
+    test "thread fetching normalizes identity and metadata and preserves errors", %{opts: opts} do
+      metadata = %{"posts" => %{"root" => %{"id" => "root"}}}
+      Process.put({RecordingTransport, :fetch_thread}, {:ok, metadata})
+      assert {:ok, %Thread{} = thread} = MattermostAdapter.fetch_thread("root", opts ++ [channel_id: "c1"])
+      assert thread.id == "mattermost:thread:root"
+      assert thread.external_thread_id == "root"
+      assert thread.external_room_id == "c1"
+      assert thread.metadata == metadata
+      assert_receive {:transport_call, :fetch_thread, ["root", forwarded]}
+      assert forwarded[:token] == "test-token"
+      assert forwarded[:url] == opts[:url]
+      Process.put({RecordingTransport, :fetch_thread}, {:error, :not_found})
+      assert {:error, :not_found} = MattermostAdapter.fetch_thread("root", opts)
+    end
+
+    test "user display names handle full, partial, and absent names", %{opts: opts} do
+      for {first, last, expected} <- [
+            {"Ada", "Lovelace", "Ada Lovelace"},
+            {"Ada", nil, "Ada"},
+            {nil, "Lovelace", "Lovelace"},
+            {"", "", "ada"},
+            {nil, nil, "ada"}
+          ] do
+        user = %{"id" => "u1", "username" => "ada", "first_name" => first, "last_name" => last}
+        Process.put({RecordingTransport, :get_user}, {:ok, user})
+        assert {:ok, result} = MattermostAdapter.get_user("u1", opts)
+        assert result == Map.put(user, "display_name", expected)
+        assert_receive {:transport_call, :get_user, ["u1", forwarded]}
+        assert forwarded[:token] == "test-token"
+      end
+
+      Process.put({RecordingTransport, :get_user}, {:error, :not_found})
+      assert {:error, :not_found} = MattermostAdapter.get_user("u1", opts)
+    end
+
+    test "DM creation rejects invalid channels and preserves errors", %{opts: opts} do
+      for channel <- [%{}, %{"id" => ""}, %{"id" => 42}] do
+        Process.put({RecordingTransport, :open_dm_channel}, {:ok, channel})
+
+        assert {:error, _reason} =
+                 MattermostAdapter.open_dm("u1", opts ++ [bot_user_id: "bot"])
+      end
+
+      Process.put({RecordingTransport, :open_dm_channel}, {:error, :forbidden})
+      assert {:error, :forbidden} = MattermostAdapter.open_dm("u1", opts ++ [bot_user_id: "bot"])
+    end
+
+    test "listener specs default the bridge id without replacing an explicit id" do
+      for {opts, expected} <- [{[], "default"}, {[bridge_id: "explicit"], "explicit"}] do
+        assert {:ok, [spec]} = MattermostAdapter.listener_child_specs("default", opts)
+        assert spec.id == {Jido.Chat.Mattermost.Listener, expected}
+        assert {Jido.Chat.Mattermost.Listener, :start_link, [forwarded]} = spec.start
+        assert forwarded[:bridge_id] == expected
+      end
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # transform_incoming/1

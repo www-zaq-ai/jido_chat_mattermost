@@ -157,6 +157,30 @@ Adapter.send_message("ch001", "hello", transport: MyFakeTransport, token: "x")
 Downloading private attachments requires the bot to have permission to read the
 channel containing the file.
 
+## Testing and coverage
+
+`mix test` runs unit tests without a Mattermost server. Tests tagged `:integration`
+are excluded by default.
+
+The CI coverage job starts disposable PostgreSQL and Mattermost service containers,
+waits for Mattermost readiness, and runs `.github/scripts/bootstrap_mattermost.py`
+to create an account, team, channel, and attached file. Credentials are generated
+per run, the session token is masked in Actions logs, and no stored Mattermost
+secrets are required. The bootstrap script is intended only for a fresh, isolated
+test server, not an existing deployment. Service containers are removed after the job.
+
+To include integration tests against your own test instance, set `MATTERMOST_URL`,
+`MATTERMOST_TOKEN`, `MATTERMOST_CHANNEL_ID`, and `MATTERMOST_FILE_ID` (an existing
+attachment readable by that user), then run:
+
+```sh
+MIX_ENV=test mix coveralls.cobertura --include integration
+```
+
+CI uploads the combined `cover/cobertura.xml` report to Codecov and as an Actions
+artifact, even if the 95% coverage gate fails. CI runs the full test suite once,
+in the coverage job; the separate quality job does not start service containers.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).

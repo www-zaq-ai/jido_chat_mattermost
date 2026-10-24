@@ -59,46 +59,42 @@ jobs:
       - name: Check quality
         run: mix quality
 
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          otp-version: "27.3"
-          elixir-version: "1.18.4"
-
-      - name: Restore dependencies and build
-        uses: actions/cache@v5
-        with:
-          path: |
-            deps
-            _build/test
-          key: ${{ runner.os }}-test-otp27.3-elixir1.18.4-${{ hashFiles('mix.lock') }}
-
-      - name: Install Hex/Rebar
-        run: |
-          mix local.hex --force
-          mix local.rebar --force
-
-      - name: Install dependencies
-        run: mix deps.get
-
-      - name: Run tests
-        run: mix test
-
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16.6
+        env:
+          POSTGRES_USER: mattermost
+          POSTGRES_DB: mattermost
+          # Disposable database, reachable only on this job's container network.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U mattermost -d mattermost"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mattermost:
+        image: mattermost/mattermost-team-edition:10.11.0
+        env:
+          MM_SQLSETTINGS_DRIVERNAME: postgres
+          MM_SQLSETTINGS_DATASOURCE: postgres://mattermost@postgres:5432/mattermost?sslmode=disable&connect_timeout=10
+          MM_SERVICESETTINGS_SITEURL: http://localhost:8065
+          # Required by the image's built-in mmctl --local healthcheck.
+          MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
+          MM_TEAMSETTINGS_ENABLEUSERCREATION: "true"
+          MM_EMAILSETTINGS_REQUIREEMAILVERIFICATION: "false"
+          MM_LOGSETTINGS_CONSOLELEVEL: ERROR
+        ports:
+          - 8065:8065
+        options: --restart on-failure:5
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
@@ -123,19 +119,32 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
 
+      - name: Bootstrap ephemeral Mattermost fixtures
+        run: python3 .github/scripts/bootstrap_mattermost.py --url http://localhost:8065
+
       - name: Run coverage
-        run: mix coveralls.json
+        run: mix coveralls.cobertura --include integration
+
+      - name: Diagnose service failures
+        if: failure()
+        env:
+          MATTERMOST_CONTAINER: ${{ job.services.mattermost.id }}
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker inspect --format '{{json .State}}' "$MATTERMOST_CONTAINER" "$POSTGRES_CONTAINER"
+          docker logs --tail 100 "$MATTERMOST_CONTAINER"
 
       - name: Save coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage
-          path: cover/excoveralls.json
+          path: cover/cobertura.xml
           if-no-files-found: ignore
 
-      - name: Upload coverage
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() && hashFiles('cover/cobertura.xml') != '' }}
         uses: codecov/codecov-action@v5
         with:
-          files: ./cover/excoveralls.json
+          files: ./cover/cobertura.xml
           token: ${{ secrets.CODECOV_TOKEN }}
