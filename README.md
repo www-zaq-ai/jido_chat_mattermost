@@ -156,3 +156,7 @@ Adapter.send_message("ch001", "hello", transport: MyFakeTransport, token: "x")
 
 Downloading private attachments requires the bot to have permission to read the
 channel containing the file.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
