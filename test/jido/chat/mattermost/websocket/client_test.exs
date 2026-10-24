@@ -105,6 +105,85 @@ defmodule Jido.Chat.Mattermost.WebSocket.ClientTest do
     {:text, Jason.encode!(event)}
   end
 
+  describe "retained authentication and event edge cases" do
+    test "unknown and absent auth statuses leave pending authentication unchanged" do
+      state = Map.put(capturing_sink_state(), :auth_status, :pending)
+
+      for event <- [
+            %{"seq_reply" => 1},
+            %{"seq_reply" => 1, "status" => "unknown"},
+            %{"seq_reply" => 1, "status" => nil}
+          ] do
+        assert {:ok, ^state} = Client.handle_in({:text, Jason.encode!(event)}, state)
+        refute_received {:sink_called, _, _}
+      end
+    end
+
+    test "failure statuses without an error object preserve the failure reason" do
+      for status <- ["fail", "failed", "error"] do
+        event = %{"seq_reply" => 1, "status" => status}
+
+        assert catch_exit(Client.handle_in({:text, Jason.encode!(event)}, @base_state)) ==
+                 {:auth_failed, status}
+      end
+    end
+
+    test "successful authentication still accepts string sequence replies and status aliases" do
+      for seq <- [1, "1"], status <- ["OK", "success"] do
+        event = %{"seq_reply" => seq, "status" => status}
+        assert {:ok, state} = Client.handle_in({:text, Jason.encode!(event)}, @base_state)
+        assert state.auth_status == :ok
+      end
+    end
+
+    test "dispatching after authentication preserves its successful status" do
+      state = Map.put(capturing_sink_state(), :auth_status, :ok)
+      assert {:ok, ^state} = Client.handle_in(posted_frame(%{}), state)
+      assert_received {:sink_called, _, _}
+    end
+
+    test "posts are dispatched without optional bot configuration" do
+      for state <- [
+            Map.delete(capturing_sink_state(), :bot_user_id),
+            Map.put(capturing_sink_state(), :bot_user_id, nil)
+          ] do
+        assert {:ok, _} = Client.handle_in(posted_frame(%{"user_id" => "bot-uid"}), state)
+        assert_receive {:sink_called, %{"post" => %{"user_id" => "bot-uid"}}, _}
+      end
+    end
+
+    test "direct and group-direct posts bypass the channel allowlist" do
+      state = Map.put(capturing_sink_state(), :channel_ids, ["tracked-chan"])
+      {:text, json} = posted_frame(%{"channel_id" => "unlisted"})
+
+      for type <- ["D", "G"] do
+        event = Jason.decode!(json) |> put_in(["data", "channel_type"], type)
+        assert {:ok, _} = Client.handle_in({:text, Jason.encode!(event)}, state)
+        assert_receive {:sink_called, %{"channel_type" => ^type}, _}
+      end
+    end
+
+    test "malformed nested reaction JSON is ignored without dispatch" do
+      state = capturing_sink_state()
+
+      for reaction <- ["{invalid", "[]", "42", "null", "\"scalar\""] do
+        frame = reaction_frame("reaction_added", %{}, %{"data" => %{"reaction" => reaction}})
+        assert {:ok, ^state} = Client.handle_in(frame, state)
+        refute_received {:sink_called, _, _}
+      end
+    end
+
+    test "non-map broadcast metadata without a channel id is ignored" do
+      state = capturing_sink_state()
+
+      for broadcast <- [nil, [], "invalid"] do
+        frame = reaction_frame("reaction_added", %{}, %{"broadcast" => broadcast})
+        assert {:ok, ^state} = Client.handle_in(frame, state)
+        refute_received {:sink_called, _, _}
+      end
+    end
+  end
+
   # ── handle_connect/3 ──────────────────────────────────────────────────
 
   describe "handle_connect/3" do

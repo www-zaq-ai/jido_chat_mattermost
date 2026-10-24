@@ -178,7 +178,7 @@ MIX_ENV=test mix coveralls.cobertura --include integration
 ```
 
 CI uploads the combined `cover/cobertura.xml` report to Codecov and as an Actions
-artifact, even if the 80% coverage gate fails. Ordinary test and quality jobs do
+artifact, even if the 95% coverage gate fails. Ordinary test and quality jobs do
 not start service containers.
 
 ## License

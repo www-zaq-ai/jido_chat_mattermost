@@ -183,18 +183,11 @@ defmodule Jido.Chat.Mattermost.WebSocket.Client do
     end
   end
 
-  defp normalize_status(:ok), do: :ok
-  defp normalize_status(:success), do: :ok
-  defp normalize_status(:error), do: :error
-  defp normalize_status(:fail), do: :error
-  defp normalize_status(:failed), do: :error
   defp normalize_status(_status), do: :unknown
 
   defp auth_failure_reason(%{"error" => error}), do: error
   defp auth_failure_reason(%{"status" => status}), do: status
-  defp auth_failure_reason(_event), do: :authentication_failed
 
-  defp auth_success_fallback(%{auth_status: :ok} = state), do: state
   defp auth_success_fallback(state), do: Map.put(state, :auth_status, :ok)
 
   defp handle_posted(%{"data" => data}, state) do

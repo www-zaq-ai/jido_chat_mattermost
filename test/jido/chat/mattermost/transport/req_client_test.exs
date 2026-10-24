@@ -14,6 +14,87 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClientTest do
 
   defp opts, do: [url: @url, token: @token]
 
+  test "invalid authentication is preserved across writes, uploads, downloads, and typing" do
+    post = create_post("authentication failure target")
+    invalid_opts = Keyword.put(opts(), :token, Base.encode16(:crypto.strong_rand_bytes(24)))
+
+    for {callback, args} <- [
+          {:send_message, [@channel_id, "unauthorized"]},
+          {:edit_message, [@channel_id, post["id"], "unauthorized"]},
+          {:upload_file, [@channel_id, %{body: "bytes", filename: "unauthorized.txt"}]},
+          {:download_file, [@file_id]},
+          {:add_reaction, [post["id"], "thumbsup"]},
+          {:send_typing, [@channel_id]}
+        ] do
+      assert {:error, {401, body}} = apply(ReqClient, callback, args ++ [invalid_opts])
+      assert is_map(body) or is_binary(body)
+    end
+
+    assert {:ok, unchanged} = ReqClient.fetch_post(post["id"], opts())
+    assert unchanged["message"] == "authentication failure target"
+  end
+
+  test "downloading a nonexistent file preserves its HTTP error" do
+    missing_id = String.duplicate("0", 26)
+    assert {:error, {404, body}} = ReqClient.download_file(missing_id, opts())
+    assert is_binary(body)
+  end
+
+  @tag timeout: 120_000
+  @tag capture_log: true
+  test "network errors propagate through every HTTP request helper" do
+    # Obtain an OS-assigned local port, then close it to exercise real connection failures.
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, {_, port}} = :inet.sockname(socket)
+    :ok = :gen_tcp.close(socket)
+    unavailable_opts = Keyword.put(opts(), :url, "http://127.0.0.1:#{port}")
+
+    for {callback, args} <- [
+          {:fetch_post, ["p1"]},
+          {:send_message, [@channel_id, "unreachable"]},
+          {:edit_message, [@channel_id, "p1", "unreachable"]},
+          {:delete_message, [@channel_id, "p1"]},
+          {:upload_file, [@channel_id, %{body: "bytes", filename: "unreachable.txt"}]},
+          {:download_file, [@file_id]}
+        ] do
+      assert {:error, %Req.TransportError{reason: :econnrefused}} =
+               apply(ReqClient, callback, args ++ [unavailable_opts])
+    end
+  end
+
+  test "application defaults and per-call precedence work in an isolated VM" do
+    script = ~S"""
+    import ExUnit.Assertions
+    alias Jido.Chat.Mattermost.Transport.ReqClient
+    {:ok, _} = Application.ensure_all_started(:req)
+    url = System.fetch_env!("MATTERMOST_URL")
+    token = System.fetch_env!("MATTERMOST_TOKEN")
+    id = System.fetch_env!("MATTERMOST_CHANNEL_ID")
+
+    Application.put_env(:jido_chat_mattermost, :url, url)
+    Application.put_env(:jido_chat_mattermost, :token, token)
+    assert {:ok, %{"id" => ^id}} = ReqClient.fetch_channel(id, [])
+
+    Application.put_env(:jido_chat_mattermost, :url, "http://127.0.0.1:1")
+    Application.put_env(:jido_chat_mattermost, :token, "invalid")
+    assert {:ok, %{"id" => ^id}} = ReqClient.fetch_channel(id, url: url, token: token)
+    """
+
+    paths = Path.wildcard(Path.join([Mix.Project.build_path(), "lib", "*", "ebin"]))
+    args = Enum.flat_map(paths, &["-pa", &1]) ++ ["-e", script]
+    {output, status} = System.cmd("elixir", args, stderr_to_stdout: true)
+    assert status == 0, String.replace(output, @token, "[REDACTED]")
+  end
+
+  test "the adapter defaults to ReqClient when no transport is selected" do
+    assert {:ok, response} = Jido.Chat.Mattermost.Adapter.send_message(@channel_id, "default transport", opts())
+    post_id = response.external_message_id
+    on_exit(fn -> ReqClient.delete_message(@channel_id, post_id, opts()) end)
+    assert {:ok, post} = ReqClient.fetch_post(post_id, opts())
+    assert post["message"] == "default transport"
+    assert post["channel_id"] == @channel_id
+  end
+
   defp create_post(text, extra_opts \\ []) do
     assert {:ok, post} = ReqClient.send_message(@channel_id, text, opts() ++ extra_opts)
     on_exit(fn -> ReqClient.delete_message(@channel_id, post["id"], opts()) end)

@@ -124,6 +124,89 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
 
   defp fake_opts, do: [transport: FakeTransport]
 
+  describe "retained media validation and upload cases" do
+    test "invalid media references fail before contacting the transport" do
+      for reference <- [nil, 42, [], "ftp://example.com/file", "https://example.com"] do
+        assert {:error, :invalid_media_reference} =
+                 MattermostAdapter.fetch_media(reference, transport: RecordingTransport)
+
+        refute_received {:transport_call, _, _}
+      end
+    end
+
+    test "URL-only media maps and structs fall back to the Mattermost file URL" do
+      url = "https://chat.example.com/api/v4/files/file_123"
+      Process.put({RecordingTransport, :download_file}, {:ok, "bytes"})
+
+      for reference <- [%{url: url}, %{"url" => url}, Media.new(%{url: url})] do
+        assert {:ok, "bytes"} =
+                 MattermostAdapter.fetch_media(reference, transport: RecordingTransport)
+
+        assert_receive {:transport_call, :download_file, ["file_123", _]}
+      end
+    end
+
+    test "incoming media ignores malformed entries but retains valid attachments" do
+      payload = %{
+        "post" => %{
+          "id" => "p1",
+          "channel_id" => "c1",
+          "user_id" => "u1",
+          "message" => "files",
+          "metadata" => %{"files" => [nil, 42, "invalid", %{"id" => "file_123", "name" => "valid.txt"}]}
+        }
+      }
+
+      assert {:ok, incoming} = MattermostAdapter.transform_incoming(payload)
+      assert [%Media{filename: "valid.txt", url: "mattermost://file/file_123"}] = incoming.media
+    end
+
+    test "file metadata without identity does not fabricate a download URL" do
+      payload = %{
+        "post" => %{
+          "id" => "p1",
+          "channel_id" => "c1",
+          "user_id" => "u1",
+          "message" => "files",
+          "metadata" => %{"files" => [%{"name" => "unknown.txt"}]}
+        }
+      }
+
+      assert {:ok, incoming} = MattermostAdapter.transform_incoming(payload)
+      assert [%Media{url: nil, filename: "unknown.txt"}] = incoming.media
+    end
+
+    test "empty or malformed upload results prevent a post from being sent" do
+      upload = FileUpload.new(%{kind: :file, data: "bytes", filename: "file.bin"})
+
+      for result <- [%{}, %{"file_infos" => []}, %{"file_infos" => "invalid"}] do
+        Process.put({RecordingTransport, :upload_file}, {:ok, result})
+
+        assert {:error, :missing_uploaded_file_id} =
+                 MattermostAdapter.send_file("c1", upload, transport: RecordingTransport)
+
+        assert_receive {:transport_call, :upload_file, ["c1", _, _]}
+        refute_received {:transport_call, :send_message, _}
+      end
+    end
+
+    test "uploaded image, audio, and video MIME types determine delivered kind" do
+      for {mime, expected} <- [{"image/png", :image}, {"audio/ogg", :audio}, {"video/mp4", :video}] do
+        upload = FileUpload.new(%{kind: :file, data: "bytes", filename: "attachment.bin"})
+        file = %{"id" => "f1", "mime_type" => mime}
+        Process.put({RecordingTransport, :upload_file}, {:ok, %{"file_infos" => [file]}})
+        Process.put({RecordingTransport, :send_message}, {:ok, %{"id" => "p1"}})
+
+        assert {:ok, response} =
+                 MattermostAdapter.send_file("c1", upload, transport: RecordingTransport)
+
+        assert response.metadata.delivered_kind == expected
+        assert response.metadata.upload_kind == :file
+        assert response.metadata.content_type == mime
+      end
+    end
+  end
+
   describe "additional adapter contracts" do
     setup do
       {:ok,
