@@ -157,6 +157,21 @@ Adapter.send_message("ch001", "hello", transport: MyFakeTransport, token: "x")
 Downloading private attachments requires the bot to have permission to read the
 channel containing the file.
 
+### Attachment MIME policy
+
+Requires `jido_chat` 1.2.1 or newer. Incoming file metadata uses the shared
+`Jido.Chat.MediaType` resolver: valid provider MIME takes precedence, followed by
+best-effort hints from the filename, Mattermost file-info extension, then URL path
+(ignoring query parameters). Provider MIME is canonicalized to lowercase without
+parameters; blank and invalid values are treated as absent. Explicit document or
+`application/octet-stream` MIME is not overridden by an image-like filename.
+
+Unknown formats keep `media_type: nil` and `kind: :file`. There is no Mattermost-wide
+image default, no normalization-time download, and no transcoding. The original
+event remains in `Incoming.raw`; file IDs and provider extension remain in media
+metadata. `fetch_media/2` returns the original downloaded bytes without decoding
+the response body.
+
 ## Testing and coverage
 
 `mix test` runs unit tests without a Mattermost server. Tests tagged `:integration`
@@ -176,6 +191,11 @@ attachment readable by that user), then run:
 ```sh
 MIX_ENV=test mix coveralls.cobertura --include integration
 ```
+
+The MIME integration audit uploads JPEG, PNG, GIF, WebP, and text-document fixtures
+through both path-backed and byte-backed uploads. It checks the upload and fetched
+post file-info MIME, incoming normalization, and byte-for-byte download equality.
+The fixture sources are documented in `test/fixtures/README.md`.
 
 CI uploads the combined `cover/cobertura.xml` report to Codecov and as an Actions
 artifact, even if the 95% coverage gate fails. CI runs the full test suite once,

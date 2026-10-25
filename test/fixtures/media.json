@@ -1,0 +1,33 @@
+[
+  {
+    "filename": "pixel.jpg",
+    "media_type": "image/jpeg",
+    "kind": "image",
+    "base64": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABAAEDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEBAAAAAAAAAAAAAAAAAAAHCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ADoDFU3/2Q=="
+  },
+  {
+    "filename": "pixel.png",
+    "media_type": "image/png",
+    "kind": "image",
+    "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAACklEQVQI12NgAAAAAgAB4iG8MwAAAABJRU5ErkJggg=="
+  },
+  {
+    "filename": "pixel.gif",
+    "media_type": "image/gif",
+    "kind": "image",
+    "base64": "R0lGODlhAQABAPAAAP8AAAAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw=="
+  },
+  {
+    "filename": "pixel.webp",
+    "media_type": "image/webp",
+    "kind": "image",
+    "base64": "UklGRjwAAABXRUJQVlA4IDAAAADQAQCdASoBAAEAAgA0JaACdLoB+AADsAD+8MQL/yC5YXXI1/8gP+QH/ID/+PIAAAA="
+  },
+  {
+    "filename": "document.txt",
+    "media_type": "text/plain",
+    "file_info_media_type": "text/plain; charset=utf-8",
+    "kind": "file",
+    "base64": "T3JpZ2luYWwgTWF0dGVybW9zdCBkb2N1bWVudC4K"
+  }
+]

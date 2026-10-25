@@ -38,7 +38,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
     TypingOptions
   }
 
-  alias Jido.Chat.{ChannelInfo, FileUpload, Media, Mention, Response, Thread}
+  alias Jido.Chat.{ChannelInfo, FileUpload, Media, MediaType, Mention, Response, Thread}
 
   # --- Adapter identity ---
 
@@ -320,6 +320,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   # --- User profile ---
 
+  @impl true
   def get_user(user_id, opts \\ []) do
     o = FetchOptions.new(opts)
 
@@ -403,20 +404,27 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   defp normalize_file_media(file) when is_map(file) do
     file_id = map_get(file, ["id", :id])
+    url = get_non_blank(file, ["link", :link, "permalink", :permalink]) || media_reference_url(file_id)
+    filename = get_non_blank(file, ["name", :name])
+    extension = get_non_blank(file, ["extension", :extension])
+
+    media_type =
+      MediaType.resolve(map_get(file, ["mime_type", :mime_type]), filename: filename) ||
+        media_type_from_extension(extension) ||
+        MediaType.from_filename(url)
 
     Media.new(%{
-      url:
-        map_get(file, ["link", :link, "permalink", :permalink]) ||
-          media_reference_url(file_id),
-      filename: map_get(file, ["name", :name]),
-      media_type: map_get(file, ["mime_type", :mime_type]),
+      kind: MediaType.kind(media_type),
+      url: url,
+      filename: filename,
+      media_type: media_type,
       size_bytes: map_get(file, ["size", :size]),
       width: map_get(file, ["width", :width]),
       height: map_get(file, ["height", :height]),
       metadata:
         %{
-          file_id: map_get(file, ["id", :id]),
-          extension: map_get(file, ["extension", :extension])
+          file_id: file_id,
+          extension: extension
         }
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
         |> Map.new()
@@ -424,6 +432,24 @@ defmodule Jido.Chat.Mattermost.Adapter do
   end
 
   defp normalize_file_media(_), do: nil
+
+  defp media_type_from_extension(extension) when is_binary(extension) do
+    extension
+    |> String.trim()
+    |> String.trim_leading(".")
+    |> then(&MediaType.from_filename("file." <> &1))
+  end
+
+  defp media_type_from_extension(_extension), do: nil
+
+  defp get_non_blank(map, keys) do
+    Enum.find_value(keys, fn key ->
+      case Map.get(map, key) do
+        value when is_binary(value) -> if(String.trim(value) == "", do: nil, else: value)
+        _other -> nil
+      end
+    end)
+  end
 
   defp media_file_id(%Media{url: url, metadata: metadata}) do
     metadata
