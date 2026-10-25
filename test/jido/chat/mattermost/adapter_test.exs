@@ -568,6 +568,109 @@ defmodule Jido.Chat.Mattermost.AdapterTest do
     end
   end
 
+  describe "incoming file MIME resolution" do
+    for {filename, media_type, kind} <- [
+          {"photo.jpg", "image/jpeg", :image},
+          {"photo.png", "image/png", :image},
+          {"photo.gif", "image/gif", :image},
+          {"photo.webp", "image/webp", :image},
+          {"report.pdf", "application/pdf", :file}
+        ] do
+      test "resolves explicit, absent, blank, and invalid MIME for #{filename}" do
+        filename = unquote(filename)
+        expected_type = unquote(media_type)
+        file = %{"id" => "file_123", "name" => filename}
+
+        for metadata <- [
+              file,
+              Map.put(file, "mime_type", expected_type),
+              Map.put(file, "mime_type", nil),
+              Map.put(file, "mime_type", " \t "),
+              Map.put(file, "mime_type", "not-a-mime"),
+              Map.put(file, "mime_type", 123)
+            ] do
+          media = incoming_file(metadata)
+          assert media.kind == unquote(kind)
+          assert media.media_type == expected_type
+          assert media.filename == filename
+          assert media.url == "mattermost://file/file_123"
+          assert media.metadata.file_id == "file_123"
+        end
+      end
+    end
+
+    test "valid provider MIME wins over misleading names, extensions, and URLs" do
+      for {provider_type, expected_type, kind} <- [
+            {" Application/PDF; charset=binary ", "application/pdf", :file},
+            {"application/octet-stream", "application/octet-stream", :file},
+            {"IMAGE/GIF", "image/gif", :image},
+            {"audio/ogg", "audio/ogg", :audio},
+            {"video/webm", "video/webm", :video}
+          ] do
+        media =
+          incoming_file(%{
+            "name" => "misleading.png",
+            "extension" => "jpg",
+            "link" => "https://mm.example.com/photo.webp",
+            "mime_type" => provider_type
+          })
+
+        assert media.media_type == expected_type
+        assert media.kind == kind
+      end
+    end
+
+    test "fallbacks use filename, then file-info extension, then signed URL path" do
+      for {file, expected_type} <- [
+            {%{"name" => "photo.GIF", "extension" => "png"}, "image/gif"},
+            {%{"name" => "extensionless", "extension" => " .PNG "}, "image/png"},
+            {%{"name" => "archive.unknown", "extension" => "webp"}, "image/webp"},
+            {%{"name" => " ", "link" => " ", "permalink" => "https://mm.example.com/photo.PNG?token=signed"},
+             "image/png"},
+            {%{name: "extensionless", extension: "JPEG", mime_type: " "}, "image/jpeg"},
+            {%{"name" => "unknown", "extension" => "unknown", "link" => "https://mm.example.com/photo.webp?q=1"},
+             "image/webp"}
+          ] do
+        media = incoming_file(file)
+        assert media.kind == :image
+        assert media.media_type == expected_type
+      end
+    end
+
+    test "blank links retain private download references and raw file metadata" do
+      file = %{"id" => "file_123", "name" => " ", "link" => " ", "permalink" => "", "extension" => " .PNG "}
+      media = incoming_file(file)
+      assert media.filename == nil
+      assert media.url == "mattermost://file/file_123"
+      assert media.metadata == %{file_id: "file_123", extension: " .PNG "}
+    end
+
+    test "unknown files receive neither a MIME nor an image default" do
+      for value <- [nil, "", " \n ", "invalid", %{}] do
+        media = incoming_file(%{"id" => "unknown", "name" => "archive.unknown", "mime_type" => value})
+        assert media.kind == :file
+        assert media.media_type == nil
+      end
+    end
+  end
+
+  defp incoming_file(file) do
+    payload = %{
+      "post" => %{
+        "id" => "post_123",
+        "user_id" => "u1",
+        "channel_id" => "c1",
+        "message" => "attachment",
+        "metadata" => %{"files" => [file]}
+      }
+    }
+
+    assert {:ok, incoming} = MattermostAdapter.transform_incoming(payload)
+    assert [media] = incoming.media
+    assert incoming.raw == payload
+    media
+  end
+
   # ---------------------------------------------------------------------------
   # send_message/3
   # ---------------------------------------------------------------------------

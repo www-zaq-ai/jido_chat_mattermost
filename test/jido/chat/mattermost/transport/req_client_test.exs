@@ -11,6 +11,7 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClientTest do
   @file_id System.get_env("MATTERMOST_FILE_ID", "")
 
   alias Jido.Chat.Mattermost.Transport.ReqClient
+  alias Jido.Chat.Mattermost.Adapter
 
   defp opts, do: [url: @url, token: @token]
 
@@ -210,6 +211,48 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClientTest do
       assert {:ok, fetched} = ReqClient.fetch_post(post["id"], opts())
       assert fetched["file_ids"] == [info["id"]]
       assert {:ok, ^bytes} = ReqClient.download_file(info["id"], opts())
+    end
+  end
+
+  @tag :tmp_dir
+  test "JPEG, PNG, GIF, WebP, and documents retain file-info MIME and original bytes", %{tmp_dir: tmp_dir} do
+    fixtures =
+      __DIR__
+      |> Path.join("../../../../fixtures/media.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    for fixture <- fixtures,
+        source <- [:path, :bytes] do
+      %{"filename" => filename, "media_type" => media_type, "kind" => kind, "base64" => encoded} = fixture
+      file_info_media_type = Map.get(fixture, "file_info_media_type", media_type)
+      bytes = Base.decode64!(encoded)
+      path = Path.join(tmp_dir, filename)
+      File.write!(path, bytes)
+
+      file =
+        case source do
+          :path -> %{path: path}
+          :bytes -> %{body: bytes, filename: filename, content_type: media_type}
+        end
+
+      assert {:ok, %{"file_infos" => [info]}} = ReqClient.upload_file(@channel_id, file, opts())
+      assert info["name"] == filename
+      assert info["mime_type"] == file_info_media_type
+      assert info["size"] == byte_size(bytes)
+
+      post = create_post("MIME audit #{filename} #{source}", file_ids: [info["id"]])
+      assert {:ok, fetched} = ReqClient.fetch_post(post["id"], opts())
+      assert [fetched_info] = fetched["metadata"]["files"]
+      assert fetched_info["id"] == info["id"]
+      assert fetched_info["mime_type"] == file_info_media_type
+
+      assert {:ok, incoming} = Adapter.transform_incoming(%{"post" => fetched})
+      assert [media] = incoming.media
+      assert media.media_type == media_type
+      assert Atom.to_string(media.kind) == kind
+      assert media.metadata.file_id == info["id"]
+      assert {:ok, ^bytes} = Adapter.fetch_media(media, opts())
     end
   end
 end
