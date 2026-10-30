@@ -50,7 +50,13 @@ defmodule Jido.Chat.Mattermost.Transport.ReqClient do
 
   @impl true
   def edit_message(_channel_id, post_id, text, opts) do
-    put("/api/v4/posts/#{post_id}", %{"id" => post_id, "message" => text}, opts)
+    body = %{"id" => post_id, "message" => text}
+
+    if Keyword.has_key?(opts, :file_ids) do
+      put("/api/v4/posts/#{post_id}/patch", Map.put(body, "file_ids", opts[:file_ids]), opts)
+    else
+      put("/api/v4/posts/#{post_id}", body, opts)
+    end
   end
 
   @impl true

@@ -54,6 +54,7 @@ defmodule Jido.Chat.Mattermost.Adapter do
       send_file: :native,
       post_message: :fallback,
       edit_message: :native,
+      edit_attachments: :native,
       delete_message: :native,
       start_typing: :native,
       fetch_metadata: :native,
@@ -178,10 +179,8 @@ defmodule Jido.Chat.Mattermost.Adapter do
     o = SendOptions.new(opts)
     transport_opts = SendOptions.transport_opts(o)
 
-    with {:ok, upload_input} <- upload_input(upload),
-         {:ok, upload_result} <-
-           transport(o).upload_file(channel_id, upload_input, transport_opts),
-         {:ok, file_ids} <- uploaded_file_ids_result(upload_result),
+    with {:ok, upload_result, file_ids} <-
+           upload_file(channel_id, upload, transport(o), transport_opts),
          {:ok, post_result} <-
            transport(o).send_message(
              channel_id,
@@ -192,14 +191,44 @@ defmodule Jido.Chat.Mattermost.Adapter do
     end
   end
 
+  @doc """
+  Edits a post, optionally attaching one prepared file through `files: [upload]`.
+  Text-only edits preserve attachments. File edits reuse the upload path and patch
+  the existing post; upload/edit errors never fall back to creating another post.
+  As with send_file, an upload can remain stored if the subsequent edit fails.
+  """
   @impl true
   def edit_message(channel_id, post_id, text, opts \\ []) do
     o = EditOptions.new(opts)
 
-    with {:ok, result} <-
-           transport(o).edit_message(channel_id, post_id, text, EditOptions.transport_opts(o)) do
-      {:ok, response_from_post(result, channel_id, :edited, post_id)}
+    with {:ok, transport_opts, media} <- edit_file_opts(channel_id, o),
+         {:ok, result} <- transport(o).edit_message(channel_id, post_id, text, transport_opts),
+         :ok <- confirm_edited_files(result, transport_opts[:file_ids]) do
+      response = response_from_post(result, channel_id, :edited, post_id)
+      {:ok, %{response | metadata: Map.put(response.metadata, :media, media)}}
     end
+  end
+
+  defp edit_file_opts(_channel_id, %EditOptions{files: []} = o),
+    do: {:ok, EditOptions.transport_opts(o), []}
+
+  defp edit_file_opts(channel_id, %EditOptions{files: [file]} = o) do
+    opts = EditOptions.transport_opts(o)
+
+    with {:ok, upload_result, ids} <-
+           upload_file(channel_id, FileUpload.normalize(file), transport(o), opts) do
+      {:ok, Keyword.put(opts, :file_ids, ids), uploaded_media(upload_result)}
+    end
+  end
+
+  defp edit_file_opts(_channel_id, _o), do: {:error, :multiple_attachments_unsupported}
+
+  defp confirm_edited_files(_result, nil), do: :ok
+
+  defp confirm_edited_files(result, ids) do
+    if Enum.all?(ids, &(&1 in (map_get(result, ["file_ids", :file_ids]) || []))),
+      do: :ok,
+      else: {:error, :unconfirmed_delivery}
   end
 
   @impl true
@@ -397,14 +426,19 @@ defmodule Jido.Chat.Mattermost.Adapter do
       status: status,
       raw: post,
       metadata: %{
-        root_id: nilify(map_get(post, ["root_id", :root_id]))
+        root_id: nilify(map_get(post, ["root_id", :root_id])),
+        source_author_id: map_get(post, ["user_id", :user_id])
       }
     })
   end
 
   defp normalize_file_media(file) when is_map(file) do
     file_id = map_get(file, ["id", :id])
-    url = get_non_blank(file, ["link", :link, "permalink", :permalink]) || media_reference_url(file_id)
+
+    url =
+      get_non_blank(file, ["link", :link, "permalink", :permalink]) ||
+        media_reference_url(file_id)
+
     filename = get_non_blank(file, ["name", :name])
     extension = get_non_blank(file, ["extension", :extension])
 
@@ -514,6 +548,14 @@ defmodule Jido.Chat.Mattermost.Adapter do
 
   defp media_reference_url(_file_id), do: nil
 
+  defp upload_file(channel_id, upload, transport, opts) do
+    with {:ok, input} <- upload_input(upload),
+         {:ok, result} <- transport.upload_file(channel_id, input, opts),
+         {:ok, ids} <- uploaded_file_ids_result(result) do
+      {:ok, result, ids}
+    end
+  end
+
   defp upload_input(%FileUpload{path: path} = upload) when is_binary(path) and path != "" do
     {:ok,
      %{
@@ -581,6 +623,13 @@ defmodule Jido.Chat.Mattermost.Adapter do
   defp uploaded_file_infos(file_infos) when is_list(file_infos), do: file_infos
   defp uploaded_file_infos(_), do: []
 
+  defp uploaded_media(upload_result) do
+    upload_result
+    |> uploaded_file_infos()
+    |> Enum.map(&normalize_file_media/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
   defp upload_response(%FileUpload{} = upload, upload_result, post_result, channel_id) do
     file_info = upload_result |> uploaded_file_infos() |> List.first()
 
@@ -593,6 +642,8 @@ defmodule Jido.Chat.Mattermost.Adapter do
       raw: post_result,
       metadata:
         %{
+          media: uploaded_media(upload_result),
+          source_author_id: map_get(post_result, ["user_id", :user_id]),
           file_id: map_get(file_info, ["id", :id]),
           file_ids: uploaded_file_ids(upload_result),
           filename: map_get(file_info, ["name", :name]) || upload.filename,
